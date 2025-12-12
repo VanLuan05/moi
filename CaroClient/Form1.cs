@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks; // Chỉ cần khai báo 1 lần
 using System.Windows.Forms;
 using CaroShared;
+using System.Media;
 
 namespace CaroClient
 {
@@ -23,65 +24,100 @@ namespace CaroClient
         private int thoiGianCongThem = 3;
         // Biến đếm ngược hiện tại
         private int thoiGianConLai;
-
+        private int mySide = 0; // 1 = X, 2 = O
+        private Image imgX;
+        private Image imgO;
+        // --- THAY THẾ TOÀN BỘ HÀM KHỞI TẠO (CONSTRUCTOR) ---
         public Form1()
         {
             InitializeComponent();
-            CheckForIllegalCrossThreadCalls = false; // Tránh lỗi thread cơ bản
+            CheckForIllegalCrossThreadCalls = false;
+
+            // 1. Cài đặt giao diện mặc định
+            // Đảm bảo các nút kết nối phải HIỆN lên để người dùng bấm
+            if (groupBox2 != null) groupBox2.Visible = true; // Khung nhập IP
+            if (btnConnect != null) btnConnect.Visible = true;
+            if (txtName != null) txtName.Visible = true;
+
+            // Nút game thì ẩn hoặc hiện tùy ý (thường chưa kết nối thì chưa cho bấm)
+            if (pnlChessBoard != null) pnlChessBoard.Visible = false; // Ẩn bàn cờ trước
+
+            // 2. Load hình ảnh (Giữ nguyên tính năng này)
+            try
+            {
+                string pathX = Application.StartupPath + "\\x.png";
+                string pathO = Application.StartupPath + "\\o.png";
+                if (System.IO.File.Exists(pathX)) imgX = Image.FromFile(pathX);
+                if (System.IO.File.Exists(pathO)) imgO = Image.FromFile(pathO);
+            }
+            catch { }
+
+            // 3. Sự kiện Resize (Giữ nguyên)
+            this.Resize += new EventHandler(Form1_Resize);
+
+            // LƯU Ý: KHÔNG bắt đầu luồng ReceiveMessage ở đây nữa!
+            // Luồng đó chỉ chạy khi nào bấm nút Connect thành công.
+        }
+        // Thêm hàm xử lý sự kiện này ở bên dưới (cùng chỗ với các hàm click nút)
+        private void Form1_Resize(object sender, EventArgs e)
+        {
+            pnlChessBoard.Invalidate(); // Lệnh này bắt buộc bàn cờ xóa đi vẽ lại ngay lập tức
         }
 
+        // Hàm này giúp tính toán kích thước 1 ô cờ luôn vuông
+        private float GetCellSize()
+        {
+            // Lấy cạnh nhỏ hơn của panel để làm chuẩn
+            float minSide = Math.Min(pnlChessBoard.Width, pnlChessBoard.Height);
+            return minSide / GameConstant.CHESS_BOARD_WIDTH;
+        }
         // --- 1. KẾT NỐI SERVER ---
         private void btnConnect_Click(object sender, EventArgs e)
         {
             try
             {
-                // Kiểm tra tên
+                // Kiểm tra dữ liệu nhập
                 string playerName = txtName.Text.Trim();
-                if (string.IsNullOrEmpty(playerName))
-                {
-                    MessageBox.Show("Vui lòng nhập tên!");
-                    return;
-                }
-
-                // Kiểm tra IP
                 string ipAddress = txtIP.Text.Trim();
-                if (string.IsNullOrEmpty(ipAddress))
+
+                if (string.IsNullOrEmpty(playerName) || string.IsNullOrEmpty(ipAddress))
                 {
-                    MessageBox.Show("Vui lòng nhập IP Server!");
+                    MessageBox.Show("Vui lòng nhập Tên và IP!");
                     return;
                 }
 
-                // Kết nối
+                // 1. Tạo kết nối MỚI
                 client = new TcpClient();
-                client.Connect(ipAddress, 8080);
+                client.Connect(ipAddress, 8080); // Kết nối tới Server
 
+                // 2. Tạo luồng đọc/ghi (Quan trọng: Phải tạo ở đây)
                 stream = client.GetStream();
                 writer = new StreamWriter(stream) { AutoFlush = true };
                 reader = new StreamReader(stream);
 
-                // Gửi tên đăng nhập
+                // 3. Gửi lệnh CONNECT (Dùng lại lệnh cũ vì không dùng LOGIN nữa)
+                // Lưu ý: Server phải hỗ trợ lệnh CONNECT này (như code Server ban đầu)
                 writer.WriteLine("CONNECT|" + playerName);
 
-                // Bắt đầu nhận tin
+                // 4. Bắt đầu luồng nhận tin nhắn
                 Thread listenThread = new Thread(ReceiveMessage);
                 listenThread.IsBackground = true;
                 listenThread.Start();
 
+                // 5. Cập nhật giao diện sau khi kết nối
                 HienThongBaoTamThoi("Kết nối thành công!");
+                btnConnect.Enabled = false;
+                txtName.ReadOnly = true;
+                txtIP.ReadOnly = true;
+                pnlChessBoard.Visible = true; // Hiện bàn cờ
+                lblLuotDi.Text = "Đang đợi đối thủ...";
 
-                // Cập nhật giao diện
-                btnConnect.Enabled = false;       // Khóa nút Connect
-                btnDisconnect.Enabled = true;     // Mở nút Đăng xuất
-                txtName.ReadOnly = true;          // Khóa tên
-                txtIP.ReadOnly = true;            // Khóa IP
-                pnlChessBoard.Visible = true;     // Hiện bàn cờ
-
-                // Lưu ý: Không ResetTimer ở đây nữa, đợi GAME_START mới chạy
-                lblLuotDi.Text = "Đang đợi đối thủ vào phòng...";
+                // Cập nhật tiêu đề Form
+                this.Text = "Game Caro - " + playerName;
             }
             catch (Exception ex)
             {
-                HienThongBaoTamThoi("Lỗi kết nối: " + ex.Message);
+                MessageBox.Show("Lỗi kết nối: " + ex.Message);
             }
         }
 
@@ -143,12 +179,14 @@ namespace CaroClient
         {
             if (client == null || !client.Connected) return;
 
-            float cellWidth = (float)pnlChessBoard.Width / GameConstant.CHESS_BOARD_WIDTH;
-            float cellHeight = (float)pnlChessBoard.Height / GameConstant.CHESS_BOARD_HEIGHT;
+            // --- SỬA ĐỔI: Dùng hàm GetCellSize mới ---
+            float cellSize = GetCellSize();
 
-            int x = (int)(e.X / cellWidth);
-            int y = (int)(e.Y / cellHeight);
+            int x = (int)(e.X / cellSize);
+            int y = (int)(e.Y / cellSize);
+            // ----------------------------------------
 
+            // Kiểm tra xem click có ra ngoài bàn cờ không (vì khi co kéo, bàn cờ có thể nhỏ hơn khung chứa)
             if (x >= GameConstant.CHESS_BOARD_WIDTH || y >= GameConstant.CHESS_BOARD_HEIGHT) return;
 
             try
@@ -156,18 +194,12 @@ namespace CaroClient
                 string tinNhanGuiDi = $"MOVE|{x}|{y}";
                 writer.WriteLine(tinNhanGuiDi);
 
-                // --- [MỚI] LOGIC CỘNG GIỜ (INCREMENT) ---
-                // Sau khi đánh xong, mình được cộng thêm thời gian
+                // Logic cộng giờ (giữ nguyên như cũ)
                 thoiGianConLai += thoiGianCongThem;
-
-                // Cập nhật lại giao diện ngay lập tức để nhìn thấy mình được hồi máu
                 lblDongHo.Text = TimeSpan.FromSeconds(thoiGianConLai).ToString(@"mm\:ss");
-
-                // Cập nhật ProgressBar (không được vượt quá Max)
                 if (thoiGianConLai > prcbCoolDown.Maximum)
-                    prcbCoolDown.Maximum = thoiGianConLai; // Tự nới rộng thanh nếu thời gian cộng dồn quá nhiều
+                    prcbCoolDown.Maximum = thoiGianConLai;
                 prcbCoolDown.Value = thoiGianConLai;
-                // ----------------------------------------
             }
             catch { }
         }
@@ -196,20 +228,104 @@ namespace CaroClient
                             lblLuotDi.Text = $"Đến lượt người chơi {luotTiepTheo}";
                             Graphics g = pnlChessBoard.CreateGraphics();
 
-                            float cellWidth = (float)pnlChessBoard.Width / GameConstant.CHESS_BOARD_WIDTH;
-                            float cellHeight = (float)pnlChessBoard.Height / GameConstant.CHESS_BOARD_HEIGHT;
-                            float fontSize = cellHeight * 0.6f;
-                            Font dynamicFont = new Font("Arial", fontSize, FontStyle.Bold);
-
-                            float xPos = x * cellWidth + (cellWidth * 0.2f);
-                            float yPos = y * cellHeight + (cellHeight * 0.1f);
-
-                            if (side == 1) g.DrawString("X", dynamicFont, Brushes.Red, xPos, yPos);
-                            else g.DrawString("O", dynamicFont, Brushes.Blue, xPos, yPos);
+                            // --- SỬA ĐỔI: Dùng GetCellSize ---
+                            float cellSize = GetCellSize();
+                            float xPos = x * cellSize;
+                            float yPos = y * cellSize;
+                            // ---------------------------------
+                            PlaySound("click.wav");
+                            if (side == 1)
+                            {
+                                if (imgX != null)
+                                    g.DrawImage(imgX, xPos + 2, yPos + 2, cellSize - 4, cellSize - 4);
+                                else
+                                    g.DrawString("X", new Font("Arial", cellSize * 0.6f, FontStyle.Bold), Brushes.Red, xPos + (cellSize * 0.2f), yPos + (cellSize * 0.1f));
+                            }
+                            else
+                            {
+                                if (imgO != null)
+                                    g.DrawImage(imgO, xPos + 2, yPos + 2, cellSize - 4, cellSize - 4);
+                                else
+                                    g.DrawString("O", new Font("Arial", cellSize * 0.6f, FontStyle.Bold), Brushes.Blue, xPos + (cellSize * 0.2f), yPos + (cellSize * 0.1f));
+                            }
 
                             ResetTimer();
                         }));
                     }
+                    // ... (Các lệnh MOVE, UNDO phía trên giữ nguyên)
+
+                    else if (command == "ROUND_WIN")
+                    {
+                        int winnerSide = int.Parse(parts[1]);
+
+                        this.Invoke(new Action(() => {
+                            tmCoolDown.Stop();
+
+                            if (mySide == winnerSide)
+                                PlaySound("win.wav");  // <--- Mình thắng
+                            else
+                                PlaySound("lose.wav"); // <--- Mình thua
+
+                            string thongBao = "";
+                            // Logic xác định thắng thua
+                            if (mySide == winnerSide)
+                            {
+                                // Nếu mình thắng
+                                string doiThu = (mySide == 1) ? "O" : "X";
+                                thongBao = $"Bạn đã thắng thằng {doiThu}!";
+                            }
+                            else
+                            {
+                                // Nếu mình thua
+                                string keThang = (winnerSide == 1) ? "X" : "O";
+                                thongBao = $"Bạn đã để thua thằng {keThang}!";
+                            }
+
+                            MessageBox.Show(thongBao, "Kết quả ván đấu");
+                        }));
+                    }
+                    else if (command == "SERIES_WIN")
+                    {
+                        // Server gửi: SERIES_WIN|SideThang (Thắng chung cuộc)
+                        int winnerSide = int.Parse(parts[1]);
+                        this.Invoke(new Action(() => {
+                            tmCoolDown.Stop();
+                            string thongBao = (winnerSide == 1) ? "CHÚC MỪNG! X ĐÃ VÔ ĐỊCH!" : "CHÚC MỪNG! O ĐÃ VÔ ĐỊCH!";
+                            MessageBox.Show(thongBao, "Kết quả chung cuộc");
+                        }));
+                    }
+
+                    // ... (Các lệnh NEW_GAME, GAMEOVER giữ nguyên)
+                    else if (command == "UNDO")
+                    {
+                        int uX = int.Parse(parts[1]);
+                        int uY = int.Parse(parts[2]);
+
+                        this.Invoke(new Action(() => {
+                            Graphics g = pnlChessBoard.CreateGraphics();
+
+                            // --- SỬA ĐỔI: Dùng GetCellSize ---
+                            float cellSize = GetCellSize();
+                            // ---------------------------------
+
+                            SolidBrush eraserBrush = new SolidBrush(pnlChessBoard.BackColor);
+
+                            // Xóa ô (vẽ đè màu nền)
+                            g.FillRectangle(eraserBrush, uX * cellSize + 1, uY * cellSize + 1, cellSize - 2, cellSize - 2);
+
+                            // Vẽ lại đường viền ô
+                            Pen pen = new Pen(Color.Black);
+                            g.DrawRectangle(pen, uX * cellSize, uY * cellSize, cellSize, cellSize);
+
+                            if (lblLuotDi.Text.Contains("X"))
+                                lblLuotDi.Text = "Đã đi lại. Đến lượt người chơi O";
+                            else
+                                lblLuotDi.Text = "Đã đi lại. Đến lượt người chơi X";
+
+                            ResetTimer();
+                        }));
+                    }
+                    // ... (Các lệnh GAMEOVER, NEW_GAME, MESSAGE, CHAT giữ nguyên logic cũ) ...
                     else if (command == "GAMEOVER")
                     {
                         this.Invoke(new Action(() => {
@@ -222,6 +338,7 @@ namespace CaroClient
                     else if (command == "NEW_GAME")
                     {
                         this.Invoke(new Action(() => {
+                            PlaySound("start.wav");
                             pnlChessBoard.Invalidate();
                             lblLuotDi.Text = "Ván mới! Lượt của X";
                             ResetTimer();
@@ -230,10 +347,18 @@ namespace CaroClient
                     }
                     else if (command == "GAME_START")
                     {
+                        // Server gửi: GAME_START|Side (ví dụ: GAME_START|1)
+                        if (parts.Length > 1)
+                            mySide = int.Parse(parts[1]);
+
                         this.Invoke(new Action(() => {
                             pnlChessBoard.Invalidate();
                             lblLuotDi.Text = "Đủ người! Bắt đầu. Lượt của X";
-                            HienThongBaoTamThoi("Game bắt đầu!");
+
+                            // Thông báo cho người chơi biết họ là quân gì
+                            string quanTa = (mySide == 1) ? "X" : "O";
+                            HienThongBaoTamThoi($"Game bắt đầu! Bạn là quân {quanTa}");
+
                             ResetTimer();
                         }));
                     }
@@ -261,6 +386,37 @@ namespace CaroClient
             catch { }
         }
 
+        // Hàm phát âm thanh an toàn (không gây lỗi nếu thiếu file)
+        private void PlaySound(string fileName)
+        {
+            try
+            {
+                // Đường dẫn file nằm cùng thư mục với file exe
+                string path = Application.StartupPath + "\\" + fileName;
+
+                // Kiểm tra file có tồn tại không mới phát
+                if (System.IO.File.Exists(path))
+                {
+                    SoundPlayer player = new SoundPlayer(path);
+                    player.Play(); // Play() phát xong tự tắt, không lặp
+                }
+            }
+            catch
+            {
+                // Nếu lỗi âm thanh thì bỏ qua, không làm crash game
+            }
+        }
+        // --- 6. YÊU CẦU UNDO ---
+        private void btnUndo_Click(object sender, EventArgs e)
+        {
+            MessageBox.Show("Đã bấm nút!");
+            // Kiểm tra nếu đang kết nối thì mới gửi lệnh
+            if (client != null && client.Connected)
+            {
+                writer.WriteLine("UNDO");
+            }
+        }
+
         // --- CÁC HÀM HỖ TRỢ ---
 
         private void btnNewGame_Click(object sender, EventArgs e)
@@ -271,14 +427,18 @@ namespace CaroClient
         private void pnlChessBoard_Paint_Paint(object sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
+            float cellSize = GetCellSize(); // Dùng hàm chung
+
+            float boardWidth = cellSize * GameConstant.CHESS_BOARD_WIDTH;
+            float boardHeight = cellSize * GameConstant.CHESS_BOARD_HEIGHT;
+
             Pen pen = new Pen(Color.Black);
-            float cellWidth = (float)pnlChessBoard.Width / GameConstant.CHESS_BOARD_WIDTH;
-            float cellHeight = (float)pnlChessBoard.Height / GameConstant.CHESS_BOARD_HEIGHT;
+
+            for (int i = 0; i <= GameConstant.CHESS_BOARD_HEIGHT; i++)
+                g.DrawLine(pen, 0, i * cellSize, boardWidth, i * cellSize);
 
             for (int i = 0; i <= GameConstant.CHESS_BOARD_WIDTH; i++)
-                g.DrawLine(pen, i * cellWidth, 0, i * cellWidth, pnlChessBoard.Height);
-            for (int i = 0; i <= GameConstant.CHESS_BOARD_HEIGHT; i++)
-                g.DrawLine(pen, 0, i * cellHeight, pnlChessBoard.Width, i * cellHeight);
+                g.DrawLine(pen, i * cellSize, 0, i * cellSize, boardHeight);
         }
 
         private void tmCoolDown_Tick_1(object sender, EventArgs e)
@@ -359,20 +519,20 @@ namespace CaroClient
             control.Region = new Region(path);
         }
 
-        private void Form1_Load(object sender, EventArgs e)
-        {
-            // Biến 2 khung ảnh thành hình tròn
-            MakeCircular(ptbAvatar1);
-            MakeCircular(ptbAvatar2);
+        //private void Form1_Load(object sender, EventArgs e)
+        //{
+        //    // Biến 2 khung ảnh thành hình tròn
+        //    MakeCircular(ptbAvatar1);
+        //    MakeCircular(ptbAvatar2);
 
-            // Bo tròn các nút bấm (Bo góc 20px)
-            MakeRounded(btnConnect, 20);
-            MakeRounded(btnSend, 15);
-            MakeRounded(btnNewGame, 20);
+        //    // Bo tròn các nút bấm (Bo góc 20px)
+        //    MakeRounded(btnConnect, 20);
+        //    MakeRounded(btnSend, 15);
+        //    MakeRounded(btnNewGame, 20);
 
-            // Bo tròn cả cái bàn cờ nếu thích
-            // MakeRounded(pnlChessBoard, 10);
-        }
+        //    // Bo tròn cả cái bàn cờ nếu thích
+        //    // MakeRounded(pnlChessBoard, 10);
+        //}
 
         private void btnAvatar_Click(object sender, EventArgs e)
         {
@@ -390,6 +550,8 @@ namespace CaroClient
                 // Tạm thời chỉ hiện trên máy mình cho đẹp trước đã.
             }
         }
+
+
     }
 
 }
