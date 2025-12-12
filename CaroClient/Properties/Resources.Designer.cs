@@ -8,6 +8,8 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
+using System.Drawing;
+
 namespace CaroClient.Properties
 {
 
@@ -24,7 +26,9 @@ namespace CaroClient.Properties
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     internal class Resources
     {
-
+        internal static Image default_avatar;
+        internal static Image player_o;
+        internal static Image player_x;
         private static global::System.Resources.ResourceManager resourceMan;
 
         private static global::System.Globalization.CultureInfo resourceCulture;

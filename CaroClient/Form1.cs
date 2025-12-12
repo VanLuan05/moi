@@ -206,7 +206,19 @@ namespace CaroClient
         // --- 4. XỬ LÝ CLICK BÀN CỜ ---
         private void pnlChessBoard_Paint_MouseClick(object sender, MouseEventArgs e)
         {
+            // 1. Kiểm tra kết nối
             if (client == null || !client.Connected) return;
+
+            // 2. --- THÊM ĐOẠN NÀY: KIỂM TRA LƯỢT ĐI ---
+            // Kiểm tra xem dòng chữ thông báo có phải lượt của mình không
+            // (Đây là cách đơn giản nhất dựa trên UI hiện tại)
+            string thongBaoLuot = lblLuotDi.Text;
+
+            // Nếu mình là X (mySide=1) mà thông báo không phải "Lượt của X" -> Chặn
+            if (mySide == 1 && !thongBaoLuot.Contains("X")) return;
+
+            // Nếu mình là O (mySide=2) mà thông báo không phải "Lượt của O" -> Chặn
+            if (mySide == 2 && !thongBaoLuot.Contains("O")) return;
 
             // --- SỬA ĐỔI: Dùng hàm GetCellSize mới ---
             float cellSize = GetCellSize();
@@ -376,17 +388,16 @@ namespace CaroClient
                     }
                     else if (command == "GAME_START")
                     {
-                        // Server gửi: GAME_START|Side (ví dụ: GAME_START|1)
-                        if (parts.Length > 1)
-                            mySide = int.Parse(parts[1]);
+                        if (parts.Length > 1) mySide = int.Parse(parts[1]);
 
                         this.Invoke(new Action(() => {
-                            pnlChessBoard.Invalidate();
-                            lblLuotDi.Text = "Đủ người! Bắt đầu. Lượt của X";
+                            pnlChessBoard.Invalidate(); // Xóa bàn cờ
+                            lblLuotDi.Text = "Game bắt đầu! Lượt của X";
 
-                            // Thông báo cho người chơi biết họ là quân gì
-                            string quanTa = (mySide == 1) ? "X" : "O";
-                            HienThongBaoTamThoi($"Game bắt đầu! Bạn là quân {quanTa}");
+                            // --- SỬA TIÊU ĐỀ CỬA SỔ ---
+                            string phe = (mySide == 1) ? "X (Đi trước)" : "O (Đi sau)";
+                            this.Text = $"Game Caro Online - Bạn là quân: {phe}";
+                            // --------------------------
 
                             ResetTimer();
                         }));
