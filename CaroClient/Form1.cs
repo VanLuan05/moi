@@ -33,16 +33,21 @@ namespace CaroClient
             InitializeComponent();
             CheckForIllegalCrossThreadCalls = false;
 
-            // 1. Cài đặt giao diện mặc định
-            // Đảm bảo các nút kết nối phải HIỆN lên để người dùng bấm
+            // --- 1. CÀI ĐẶT TRẠNG THÁI GIAO DIỆN MẶC ĐỊNH ---
+            // Vì không dùng Login nên phải hiện các nút kết nối
             if (groupBox2 != null) groupBox2.Visible = true; // Khung nhập IP
             if (btnConnect != null) btnConnect.Visible = true;
             if (txtName != null) txtName.Visible = true;
 
-            // Nút game thì ẩn hoặc hiện tùy ý (thường chưa kết nối thì chưa cho bấm)
-            if (pnlChessBoard != null) pnlChessBoard.Visible = false; // Ẩn bàn cờ trước
+            // Ẩn bàn cờ khi chưa kết nối
+            if (pnlChessBoard != null) pnlChessBoard.Visible = false;
 
-            // 2. Load hình ảnh (Giữ nguyên tính năng này)
+            // Đảm bảo nút chức năng (nếu có)
+            if (btnNewGame != null) btnNewGame.Visible = true;
+            if (btnUndo != null) btnUndo.Visible = true;
+           
+
+            // --- 2. LOAD HÌNH ẢNH QUÂN CỜ ---
             try
             {
                 string pathX = Application.StartupPath + "\\x.png";
@@ -52,11 +57,35 @@ namespace CaroClient
             }
             catch { }
 
-            // 3. Sự kiện Resize (Giữ nguyên)
+            // --- 3. ĐĂNG KÝ SỰ KIỆN RESIZE ---
+            // Để bàn cờ luôn vẽ lại ô vuông khi kéo cửa sổ
             this.Resize += new EventHandler(Form1_Resize);
 
-            // LƯU Ý: KHÔNG bắt đầu luồng ReceiveMessage ở đây nữa!
-            // Luồng đó chỉ chạy khi nào bấm nút Connect thành công.
+            // --- 4. CẤU HÌNH CO GIÃN GIAO DIỆN (RESPONSIVE) ---
+            // Đây là phần sửa lỗi giao diện bị lệch khi phóng to/thu nhỏ
+
+            // Bàn cờ: Co giãn 4 chiều để luôn lấp đầy khoảng trống
+            if (pnlChessBoard != null)
+                pnlChessBoard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
+            // Cột Trái (Chat): Dãn theo chiều dọc
+            if (rtbChatLog != null)
+                rtbChatLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
+
+            // Nút Gửi & Ô nhập: Luôn dính đáy
+            if (txtMessage != null) txtMessage.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            if (btnSend != null) btnSend.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+
+            // Cột Phải (Thông tin đối thủ): Luôn dính lề Phải
+            if (ptbAvatar2 != null) ptbAvatar2.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            if (panel2 != null) panel2.Anchor = AnchorStyles.Top | AnchorStyles.Right; // Panel màu đỏ (nếu có)
+
+            // Đồng hồ & Thanh thời gian: Dính lề Phải
+            if (lblDongHo != null) lblDongHo.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            if (prcbCoolDown != null) prcbCoolDown.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            // Thiết lập kích thước tối thiểu để không bị vỡ giao diện
+            this.MinimumSize = new Size(1000, 700);
         }
         // Thêm hàm xử lý sự kiện này ở bên dưới (cùng chỗ với các hàm click nút)
         private void Form1_Resize(object sender, EventArgs e)
