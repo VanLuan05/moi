@@ -961,61 +961,65 @@ namespace CaroServer
             switch (command)
             {
                 case "MOVE":
+                    // Kiểm tra đúng lượt không
                     if (side != room.Turn) return;
 
                     int x = int.Parse(parts[1]);
                     int y = int.Parse(parts[2]);
 
                     // Kiểm tra tọa độ hợp lệ
-                    if (x < 0 || x >= room.BoardSize || y < 0 || y >= room.BoardSize)
-                        return;
+                    if (x < 0 || x >= room.BoardSize || y < 0 || y >= room.BoardSize) return;
 
                     // Kiểm tra ô trống
-                    if (room.Board[x, y] != 0)
-                        return;
+                    if (room.Board[x, y] != 0) return;
 
                     // Thực hiện nước đi
                     room.Board[x, y] = side;
                     room.History.Push($"{x}|{y}");
-                    room.Turn = (side == 1) ? 2 : 1;
-                    // ---  Lưu nước đi ---
+                    room.Turn = (side == 1) ? 2 : 1; // Đổi lượt
+
+                    // --- Lưu nước đi vào DB (Chạy Thread riêng) ---
                     if (room.CurrentMatchID != -1 && onlinePlayers.ContainsKey(client))
                     {
                         int playerID = onlinePlayers[client].UserID;
-                        int moveNum = room.History.Count; // Nước đi thứ mấy
-
-                        // Chạy Thread riêng để không làm lag game
+                        int moveNum = room.History.Count;
                         new Thread(() => DB_LuuNuocDi(room.CurrentMatchID, moveNum, playerID, x, y)).Start();
                     }
+
                     // Gửi nước đi cho cả phòng
                     BroadcastToRoom(room, $"MOVE|{x}|{y}|{side}");
 
-                    // Kiểm tra thắng thua
-                    if (CheckWin(room.Board, x, y, side, room.BoardSize))
+                    // --- KIỂM TRA THẮNG THUA (KÈM TỌA ĐỘ DÂY THẮNG) ---
+                    int sx, sy, ex, ey; // Tọa độ điểm đầu và cuối của dây thắng
+                    if (CheckWin(room.Board, x, y, side, room.BoardSize, out sx, out sy, out ex, out ey))
                     {
-                        BroadcastToRoom(room, $"GAMEOVER|{side}");
+                        // Gửi thông báo thắng kèm tọa độ để Client vẽ đường gạch ngang
+                        // Format: GAMEOVER | Side | StartX | StartY | EndX | EndY
+                        BroadcastToRoom(room, $"GAMEOVER|{side}|{sx}|{sy}|{ex}|{ey}");
+
                         Console.WriteLine($">> Phòng {room.RoomID}: {GetPlayerName(client)} thắng!");
+
+                        // Cập nhật DB kết thúc trận
                         if (room.CurrentMatchID != -1)
                         {
-                            int winnerID = onlinePlayers[client].UserID; // ID người vừa đánh thắng
+                            int winnerID = onlinePlayers[client].UserID;
                             DB_KetThucTran(room.CurrentMatchID, winnerID);
                         }
-                        // Cập nhật thống kê nếu là user đã đăng nhập
-                        if (onlinePlayers.ContainsKey(client) && onlinePlayers[client].IsLoggedIn)
+
+                        // Cập nhật Elo (Chỉ tính nếu cả 2 đang online và login)
+                        if (onlinePlayers.ContainsKey(client) && onlinePlayers[client].IsLoggedIn &&
+                            opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
                         {
                             ProcessMatchResult(room.Players[0], room.Players[1], side);
                         }
-                        if (opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
-                        {
-                            ProcessMatchResult(room.Players[0], room.Players[1], side);
-                        }
+
+                        // Reset game logic (nhưng vẫn giữ kết nối phòng)
+                        room.ResetGame();
                     }
                     break;
 
-                // --- TÌM CASE "UNDO" CŨ VÀ XÓA ĐI, THAY BẰNG ĐOẠN NÀY ---
-
+                // --- XỬ LÝ XIN ĐI LẠI (UNDO) ---
                 case "UNDO_REQUEST":
-                    // Người chơi A muốn xin đi lại -> Gửi thông báo hỏi ý kiến người chơi B
                     if (opponent != null)
                     {
                         SendToClient(opponent, "UNDO_ASK|Đối thủ muốn xin đi lại một nước. Bạn có đồng ý không?");
@@ -1027,7 +1031,7 @@ namespace CaroServer
                     break;
 
                 case "UNDO_ACCEPT":
-                    // Người chơi B đồng ý -> Thực hiện Logic Undo cũ tại đây
+                    // Logic Undo: Xóa nước đi cuối cùng
                     if (room.History.Count > 0)
                     {
                         string lastMove = room.History.Pop();
@@ -1035,58 +1039,55 @@ namespace CaroServer
                         int ux = int.Parse(pos[0]);
                         int uy = int.Parse(pos[1]);
 
-                        room.Board[ux, uy] = 0;
-                        room.Turn = (room.Turn == 1) ? 2 : 1; // Đổi lại lượt
+                        room.Board[ux, uy] = 0; // Xóa quân cờ trên bàn cờ Server
+                        room.Turn = (room.Turn == 1) ? 2 : 1; // Trả lại lượt cho người vừa xin
 
-                        // Gửi lệnh cập nhật bàn cờ cho CẢ HAI người (để xóa quân cờ trên UI)
+                        // Gửi lệnh cập nhật cho cả 2 Client
                         BroadcastToRoom(room, $"UNDO|{ux}|{uy}");
 
-                        // Thông báo cho người xin biết là được đồng ý
                         if (opponent != null) SendToClient(opponent, "MESSAGE|Đối thủ đã CHẤP NHẬN cho bạn đi lại!");
                     }
                     break;
 
                 case "UNDO_REJECT":
-                    // Người chơi B từ chối -> Báo lại cho A biết
                     if (opponent != null)
                     {
                         SendToClient(opponent, "MESSAGE|Đối thủ ĐÃ TỪ CHỐI yêu cầu đi lại của bạn!");
                     }
                     break;
 
-                // --------------------------------------------------------
-
-                case "SURRENDER":
+                // --- CÁC CHỨC NĂNG KHÁC ---
+                case "SURRENDER": // Đầu hàng
                     int winner = (side == 1) ? 2 : 1;
                     BroadcastToRoom(room, $"GAMEOVER|{winner}");
 
-                    // --- [THAY ĐỔI] ---
-                    // Người đầu hàng bị xử thua, người kia thắng
+                    // Xử lý Elo (Người đầu hàng thua)
                     ProcessMatchResult(room.Players[0], room.Players[1], winner);
-                    break;
 
-                case "DRAW_REQUEST":
-                    if (opponent != null)
-                        SendToClient(opponent, "DRAW_REQUEST");
-                    break;
-
-                case "DRAW_ACCEPT":
-                    BroadcastToRoom(room, "GAME_DRAW");
                     room.ResetGame();
-
-                    // --- [THAY ĐỔI] ---
-                    // Truyền vào 0 (nghĩa là Hòa)
-                    ProcessMatchResult(room.Players[0], room.Players[1], 0);
                     break;
 
-                case "NEW_GAME":
+                case "DRAW_REQUEST": // Xin hòa
+                    if (opponent != null) SendToClient(opponent, "DRAW_REQUEST");
+                    break;
+
+                case "DRAW_ACCEPT": // Chấp nhận hòa
+                    BroadcastToRoom(room, "GAME_DRAW");
+
+                    // Xử lý Elo (Hòa truyền vào 0)
+                    ProcessMatchResult(room.Players[0], room.Players[1], 0);
+
+                    room.ResetGame();
+                    break;
+
+                case "NEW_GAME": // Ván mới
                     room.ResetGame();
                     BroadcastToRoom(room, "NEW_GAME");
                     SendGameStart(room);
                     Console.WriteLine($">> Phòng {room.RoomID}: Ván mới!");
                     break;
 
-                case "CHAT":
+                case "CHAT": // Chat trong trận
                     if (parts.Length > 1)
                     {
                         string playerName = onlinePlayers.ContainsKey(client) ? onlinePlayers[client].DisplayName : "Unknown";
@@ -1094,9 +1095,8 @@ namespace CaroServer
                         BroadcastToRoom(room, $"CHAT|{playerName}|{chatMessage}");
                     }
                     break;
-                case "EMOTE":
-                    // Client gửi: EMOTE | Biểu tượng (Ví dụ: 😎)
-                    // Server chuyển tiếp: EMOTE | Phe (1 hoặc 2) | Biểu tượng
+
+                case "EMOTE": // Gửi biểu cảm
                     if (parts.Length > 1)
                     {
                         string emoteIcon = parts[1];
@@ -1104,40 +1104,28 @@ namespace CaroServer
                     }
                     break;
 
-                case "TIME_OUT":
+                case "TIME_OUT": // Hết giờ
                     int timeoutWinner = (side == 1) ? 2 : 1;
                     BroadcastToRoom(room, $"GAMEOVER|{timeoutWinner}");
-
-                    // --- [THAY ĐỔI] ---
                     ProcessMatchResult(room.Players[0], room.Players[1], timeoutWinner);
+                    room.ResetGame();
                     break;
 
-                case "LEAVE_GAME":
-                    // Thông báo cho đối thủ
+                case "LEAVE_GAME": // Rời phòng
                     if (opponent != null)
                     {
                         SendToClient(opponent, "MESSAGE|Đối thủ đã rời phòng!");
                         SendToClient(opponent, "OPPONENT_LEFT");
                     }
 
-                    // Xóa client khỏi phòng
                     room.Players.Remove(client);
                     writer.WriteLine("LEAVE_SUCCESS");
 
-                    // Nếu phòng trống thì xóa phòng
                     if (room.Players.Count == 0)
                     {
-                        lock (_lock)
-                        {
-                            activeRooms.Remove(room);
-                        }
+                        lock (_lock) { activeRooms.Remove(room); }
                     }
-
                     Console.WriteLine($">> {GetPlayerName(client)} rời phòng {room.RoomID}");
-                    break;
-               
-                case "DISCONNECT":
-                    // Client đang disconnect
                     break;
             }
         }
@@ -1145,41 +1133,50 @@ namespace CaroServer
         // =================================================================================
         // KIỂM TRA THẮNG THUA (CARO LOGIC)
         // =================================================================================
-        static bool CheckWin(int[,] board, int x, int y, int side, int boardSize)
+        // Hàm CheckWin mới: Trả về tọa độ điểm đầu (sx, sy) và điểm cuối (ex, ey) của dây thắng
+        // Hàm CheckWin mới: Trả về tọa độ điểm đầu (sx, sy) và điểm cuối (ex, ey) của dây thắng
+        static bool CheckWin(int[,] board, int x, int y, int side, int size, out int sx, out int sy, out int ex, out int ey)
         {
-            // Kiểm tra 4 hướng: ngang, dọc, chéo chính, chéo phụ
-            int[] dx = { 1, 0, 1, 1 };
+            sx = -1; sy = -1; ex = -1; ey = -1; // Mặc định chưa tìm thấy
+
+            int[] dx = { 1, 0, 1, 1 }; // Ngang, Dọc, Chéo Chính, Chéo Phụ
             int[] dy = { 0, 1, 1, -1 };
 
             for (int dir = 0; dir < 4; dir++)
             {
                 int count = 1;
-
-                // Kiểm tra một chiều
-                for (int i = 1; i <= 4; i++)
+                int i = 1;
+                // 1. Quét về phía dương
+                while (true)
                 {
-                    int nx = x + dx[dir] * i;
-                    int ny = y + dy[dir] * i;
-
-                    if (nx < 0 || nx >= boardSize || ny < 0 || ny >= boardSize || board[nx, ny] != side)
-                        break;
-                    count++;
+                    int nx = x + i * dx[dir];
+                    int ny = y + i * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[ny, nx] != side) break;
+                    count++; i++;
                 }
+                int endX = x + (i - 1) * dx[dir];
+                int endY = y + (i - 1) * dy[dir];
 
-                // Kiểm tra chiều ngược lại
-                for (int i = 1; i <= 4; i++)
+                // 2. Quét về phía âm
+                int j = 1;
+                while (true)
                 {
-                    int nx = x - dx[dir] * i;
-                    int ny = y - dy[dir] * i;
-
-                    if (nx < 0 || nx >= boardSize || ny < 0 || ny >= boardSize || board[nx, ny] != side)
-                        break;
-                    count++;
+                    int nx = x - j * dx[dir];
+                    int ny = y - j * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[ny, nx] != side) break;
+                    count++; j++;
                 }
+                int startX = x - (j - 1) * dx[dir];
+                int startY = y - (j - 1) * dy[dir];
 
-                if (count >= 5) return true;
+                if (count >= 5)
+                {
+                    // Gán giá trị output để gửi về Client
+                    sx = startX; sy = startY;
+                    ex = endX; ey = endY;
+                    return true;
+                }
             }
-
             return false;
         }
 
