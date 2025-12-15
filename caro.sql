@@ -98,3 +98,39 @@ GO
 
 SELECT COUNT(*) as SoLuongNguoiChoi FROM NguoiChoi;
 SELECT * FROM NguoiChoi;
+
+
+-- 2. Tự động lấy ID thật của tài khoản 'admin' và một tài khoản khác
+DECLARE @MyID INT = (SELECT TOP 1 ID FROM NguoiChoi WHERE TaiKhoan = 'admin');
+DECLARE @OpID INT = (SELECT TOP 1 ID FROM NguoiChoi WHERE TaiKhoan != 'admin');
+
+-- Kiểm tra nếu không tìm thấy admin
+IF @MyID IS NULL
+BEGIN
+    PRINT N'Lỗi: Không tìm thấy tài khoản admin!';
+END
+ELSE
+BEGIN
+    PRINT N'ID của admin là: ' + CAST(@MyID AS NVARCHAR(20));
+    PRINT N'ID đối thủ là: ' + CAST(@OpID AS NVARCHAR(20));
+
+    -- 3. Chèn trận đấu giả với ID CHÍNH XÁC vừa lấy được
+    INSERT INTO TranDau (Player1_ID, Player2_ID, Winner_ID, KichThuocBanCo, ThoiGianBatDau, ThoiGianKetThuc) 
+    VALUES 
+    (@MyID, @OpID, @MyID, 15, GETDATE(), GETDATE()), -- Admin thắng
+    (@OpID, @MyID, @OpID, 15, GETDATE(), GETDATE()), -- Thua
+    (@MyID, @OpID, NULL, 15, GETDATE(), GETDATE());  -- Hòa
+
+    -- 4. Chèn nước đi cho trận mới nhất để test Replay
+    DECLARE @LastMatchID INT = (SELECT TOP 1 MatchID FROM TranDau ORDER BY MatchID DESC);
+    
+    INSERT INTO ChiTietTranDau (MatchID, NuocDiSo, NguoiDi_ID, ToaDoX, ToaDoY) VALUES
+    (@LastMatchID, 1, @MyID, 7, 7),
+    (@LastMatchID, 2, @OpID, 7, 8),
+    (@LastMatchID, 3, @MyID, 8, 8),
+    (@LastMatchID, 4, @OpID, 6, 6);
+    
+    PRINT N'Đã thêm dữ liệu thành công cho admin!';
+END
+GO
+

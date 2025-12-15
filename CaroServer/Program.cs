@@ -59,7 +59,7 @@ namespace CaroServer
             public int Turn { get; set; } // 1 = X, 2 = O
             public bool IsGameStarted { get; set; }
             public int BoardSize { get; set; } // Kích thước bàn cờ
-            public List<TcpClient> Spectators { get; }
+            public List<TcpClient> Spectators { get; set; } = new List<TcpClient>();
 
             public Room(string roomId, bool isPrivate, int boardSize)
             {
@@ -331,23 +331,48 @@ namespace CaroServer
                             var room = activeRooms.FirstOrDefault(r => r.RoomID == roomId);
                             if (room != null)
                             {
+                                // Thêm người này vào danh sách khán giả
+                                if (room.Spectators == null) room.Spectators = new List<TcpClient>();
                                 room.Spectators.Add(client);
+
                                 Console.WriteLine($">> {GetPlayerName(client)} đang xem phòng {roomId}");
 
-                                // Gửi dữ liệu bàn cờ hiện tại (Tận dụng logic Reconnect để vẽ lại bàn cờ)
-                                string p1Name = onlinePlayers.ContainsKey(room.Players[0]) ? onlinePlayers[room.Players[0]].DisplayName : "Unknown";
+                                // Lấy tên 2 người chơi để hiển thị
+                                string p1Name = (room.Players.Count > 0 && onlinePlayers.ContainsKey(room.Players[0])) ? onlinePlayers[room.Players[0]].DisplayName : "Unknown";
                                 string p2Name = (room.Players.Count > 1 && onlinePlayers.ContainsKey(room.Players[1])) ? onlinePlayers[room.Players[1]].DisplayName : "Chờ...";
 
-                                // Gom lịch sử để Client vẽ lại
+                                // [QUAN TRỌNG] Gom lịch sử nước đi thành chuỗi để gửi về
+                                // room.History là Stack (LIFO), cần đảo ngược lại để lấy từ nước đầu tiên
                                 string historyStr = string.Join(";", room.History.Reverse().ToArray());
 
                                 // Gửi gói tin WATCH_SUCCESS
-                                // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | History
+                                // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | HistoryString
                                 SendToClient(client, $"WATCH_SUCCESS|{room.BoardSize}|{p1Name}|{p2Name}|{historyStr}");
                             }
                             else
                             {
-                                writer.WriteLine("ERROR|Phòng không tồn tại!");
+                                writer.WriteLine("MESSAGE|Phòng không tồn tại hoặc sai ID!");
+                            }
+                        }
+                    }
+                    else if (command == "LOBBY_CHAT")
+                    {
+                        // Client gửi: LOBBY_CHAT | Nội dung
+                        if (parts.Length > 1)
+                        {
+                            string content = parts[1];
+                            // Lấy tên người gửi
+                            string senderName = onlinePlayers.ContainsKey(client) ? onlinePlayers[client].DisplayName : "Unknown";
+
+                            Console.WriteLine($">> [World Chat] {senderName}: {content}");
+
+                            // Gửi cho TẤT CẢ client đang kết nối (Broadcast toàn server)
+                            lock (_lock)
+                            {
+                                foreach (var p in onlinePlayers.Keys)
+                                {
+                                    SendToClient(p, $"LOBBY_CHAT|{senderName}|{content}");
+                                }
                             }
                         }
                     }
@@ -978,11 +1003,11 @@ namespace CaroServer
                         // Cập nhật thống kê nếu là user đã đăng nhập
                         if (onlinePlayers.ContainsKey(client) && onlinePlayers[client].IsLoggedIn)
                         {
-                            UpdatePlayerStats(client, true, false, false);
+                            ProcessMatchResult(room.Players[0], room.Players[1], side);
                         }
                         if (opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
                         {
-                            UpdatePlayerStats(opponent, false, true, false);
+                            ProcessMatchResult(room.Players[0], room.Players[1], side);
                         }
                     }
                     break;
@@ -1034,12 +1059,10 @@ namespace CaroServer
                 case "SURRENDER":
                     int winner = (side == 1) ? 2 : 1;
                     BroadcastToRoom(room, $"GAMEOVER|{winner}");
-                    Console.WriteLine($">> Phòng {room.RoomID}: {GetPlayerName(client)} đầu hàng!");
 
-                    if (opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
-                    {
-                        UpdatePlayerStats(opponent, true, false, false);
-                    }
+                    // --- [THAY ĐỔI] ---
+                    // Người đầu hàng bị xử thua, người kia thắng
+                    ProcessMatchResult(room.Players[0], room.Players[1], winner);
                     break;
 
                 case "DRAW_REQUEST":
@@ -1050,17 +1073,10 @@ namespace CaroServer
                 case "DRAW_ACCEPT":
                     BroadcastToRoom(room, "GAME_DRAW");
                     room.ResetGame();
-                    Console.WriteLine($">> Phòng {room.RoomID}: Hòa!");
 
-                    // Cập nhật thống kê cho cả 2
-                    if (onlinePlayers.ContainsKey(client) && onlinePlayers[client].IsLoggedIn)
-                    {
-                        UpdatePlayerStats(client, false, false, true);
-                    }
-                    if (opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
-                    {
-                        UpdatePlayerStats(opponent, false, false, true);
-                    }
+                    // --- [THAY ĐỔI] ---
+                    // Truyền vào 0 (nghĩa là Hòa)
+                    ProcessMatchResult(room.Players[0], room.Players[1], 0);
                     break;
 
                 case "NEW_GAME":
@@ -1078,16 +1094,22 @@ namespace CaroServer
                         BroadcastToRoom(room, $"CHAT|{playerName}|{chatMessage}");
                     }
                     break;
+                case "EMOTE":
+                    // Client gửi: EMOTE | Biểu tượng (Ví dụ: 😎)
+                    // Server chuyển tiếp: EMOTE | Phe (1 hoặc 2) | Biểu tượng
+                    if (parts.Length > 1)
+                    {
+                        string emoteIcon = parts[1];
+                        BroadcastToRoom(room, $"EMOTE|{side}|{emoteIcon}");
+                    }
+                    break;
 
                 case "TIME_OUT":
                     int timeoutWinner = (side == 1) ? 2 : 1;
                     BroadcastToRoom(room, $"GAMEOVER|{timeoutWinner}");
-                    Console.WriteLine($">> Phòng {room.RoomID}: {GetPlayerName(client)} hết giờ!");
 
-                    if (opponent != null && onlinePlayers.ContainsKey(opponent) && onlinePlayers[opponent].IsLoggedIn)
-                    {
-                        UpdatePlayerStats(opponent, true, false, false);
-                    }
+                    // --- [THAY ĐỔI] ---
+                    ProcessMatchResult(room.Players[0], room.Players[1], timeoutWinner);
                     break;
 
                 case "LEAVE_GAME":
@@ -1113,7 +1135,7 @@ namespace CaroServer
 
                     Console.WriteLine($">> {GetPlayerName(client)} rời phòng {room.RoomID}");
                     break;
-
+               
                 case "DISCONNECT":
                     // Client đang disconnect
                     break;
@@ -1272,45 +1294,63 @@ namespace CaroServer
             }
         }
 
-        static void UpdatePlayerStats(TcpClient client, bool win, bool lose, bool draw)
+        // --- [NEW] HÀM XỬ LÝ KẾT QUẢ VÀ CẬP NHẬT ELO CHO CẢ 2 ---
+        // winnerSide: 1 (Player1 thắng), 2 (Player2 thắng), 0 (Hòa)
+        static void ProcessMatchResult(TcpClient client1, TcpClient client2, int winnerSide)
+        {
+            // 1. Kiểm tra 2 người chơi có hợp lệ và đã đăng nhập chưa
+            if (!onlinePlayers.ContainsKey(client1) || !onlinePlayers[client1].IsLoggedIn) return;
+            if (client2 != null && (!onlinePlayers.ContainsKey(client2) || !onlinePlayers[client2].IsLoggedIn)) return;
+
+            // Nếu đánh với máy (client2 == null) thì thôi, hoặc xử lý riêng (ở đây mình bỏ qua)
+            if (client2 == null) return;
+
+            int id1 = onlinePlayers[client1].UserID;
+            int id2 = onlinePlayers[client2].UserID;
+
+            // 2. Lấy điểm Elo hiện tại từ Database
+            int elo1 = GetPlayerElo(id1);
+            int elo2 = GetPlayerElo(id2);
+
+            // 3. Xác định kết quả thực tế (Actual Score)
+            double score1, score2;
+            if (winnerSide == 1) { score1 = 1.0; score2 = 0.0; } // P1 Thắng
+            else if (winnerSide == 2) { score1 = 0.0; score2 = 1.0; } // P2 Thắng
+            else { score1 = 0.5; score2 = 0.5; } // Hòa
+
+            // 4. Tính điểm Elo mới
+            int newElo1 = CalculateNewElo(elo1, elo2, score1);
+            int newElo2 = CalculateNewElo(elo2, elo1, score2);
+
+            // In ra Server để kiểm tra
+            Console.WriteLine($">> KẾT QUẢ: P1({elo1}->{newElo1}) vs P2({elo2}->{newElo2}) | Winner: {winnerSide}");
+
+            // 5. Cập nhật vào Database
+            UpdateUserDB(id1, newElo1, (winnerSide == 1), (winnerSide == 2), (winnerSide == 0));
+            UpdateUserDB(id2, newElo2, (winnerSide == 2), (winnerSide == 1), (winnerSide == 0));
+        }
+
+        // Hàm con để chạy lệnh SQL Update
+        static void UpdateUserDB(int uid, int newElo, bool isWin, bool isLose, bool isDraw)
         {
             try
             {
-                if (!onlinePlayers.ContainsKey(client) || !onlinePlayers[client].IsLoggedIn)
-                    return;
-
-                string username = onlinePlayers[client].Username;
-
                 using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
-
-                    string query = "UPDATE NguoiChoi SET ";
-
-                    if (win)
-                    {
-                        query += "Diem = Diem + 20, SoTranThang = SoTranThang + 1 ";
-                    }
-                    else if (lose)
-                    {
-                        query += "Diem = Diem - 10, SoTranThua = SoTranThua + 1 ";
-                    }
-                    else if (draw)
-                    {
-                        query += "Diem = Diem + 5, SoTranHoa = SoTranHoa + 1 ";
-                    }
-
-                    query += "WHERE TaiKhoan = @username";
+                    string query = "UPDATE NguoiChoi SET Diem = @elo ";
+                    if (isWin) query += ", SoTranThang = SoTranThang + 1 ";
+                    if (isLose) query += ", SoTranThua = SoTranThua + 1 ";
+                    if (isDraw) query += ", SoTranHoa = SoTranHoa + 1 ";
+                    query += "WHERE ID = @id";
 
                     SqlCommand cmd = new SqlCommand(query, conn);
-                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@elo", newElo);
+                    cmd.Parameters.AddWithValue("@id", uid);
                     cmd.ExecuteNonQuery();
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Lỗi cập nhật thống kê: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine("Lỗi Update DB: " + ex.Message); }
         }
 
         static Room FindRoomByClient(TcpClient client)
@@ -1341,15 +1381,21 @@ namespace CaroServer
 
         static void BroadcastToRoom(Room room, string message, TcpClient exclude = null)
         {
-            // Gửi cho người chơi
+            // 1. Gửi cho người đang chơi
             foreach (var player in room.Players)
             {
                 if (player != exclude) SendToClient(player, message);
             }
-            // Gửi cho khán giả (THÊM ĐOẠN NÀY)
-            foreach (var spec in room.Spectators)
+
+            // 2. [QUAN TRỌNG] Gửi cho khán giả
+            // Kiểm tra null để tránh lỗi nếu phòng chưa có khán giả
+            if (room.Spectators != null)
             {
-                if (spec != exclude) SendToClient(spec, message);
+                foreach (var spec in room.Spectators)
+                {
+                    // Khán giả luôn nhận được tin, không cần loại trừ ai
+                    if (spec != exclude) SendToClient(spec, message);
+                }
             }
         }
 
@@ -1557,12 +1603,16 @@ namespace CaroServer
         {
             try
             {
+                // 1. Kiểm tra ID người chơi
                 int myID = onlinePlayers[client].UserID;
+                Console.WriteLine($"[DEBUG] Đang lấy lịch sử cho UserID: {myID}"); // <--- LOG 1
+
                 using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
+                    // In ra tên Database đang kết nối để chắc chắn đúng cái bạn vừa chạy SQL
+                    Console.WriteLine($"[DEBUG] Đang kết nối tới DB: {conn.Database}"); // <--- LOG 2
 
-                    // 1. Truy vấn lấy ID trận đấu, Thời gian, Tên đối thủ, Kết quả
                     string query = @"SELECT TOP 10 T.MatchID, T.ThoiGianKetThuc, 
                             P1.TenHienThi as P1Name, 
                             P2.TenHienThi as P2Name,
@@ -1579,32 +1629,37 @@ namespace CaroServer
                     SqlDataReader r = cmd.ExecuteReader();
 
                     StringBuilder sb = new StringBuilder();
+                    int count = 0;
+
                     while (r.Read())
                     {
+                        count++;
                         string p1 = r["P1Name"].ToString();
                         string p2 = r["P2Name"].ToString();
-
-                        // Xử lý null cho Winner_ID
                         int winner = r["Winner_ID"] == DBNull.Value ? -1 : (int)r["Winner_ID"];
-
                         DateTime time = (DateTime)r["ThoiGianKetThuc"];
                         int matchId = (int)r["MatchID"];
 
-                        // Xác định tên đối thủ và kết quả
                         string opponent = (p1 == onlinePlayers[client].DisplayName) ? p2 : p1;
                         string result = (winner == -1) ? "HÒA" : (winner == myID ? "THẮNG" : "THUA");
 
-                        // --- [QUAN TRỌNG] GỬI ĐÚNG FORMAT MỚI ---
-                        // Format: MatchID | Thời gian | Đối thủ | Kết quả $
+                        // In ra chi tiết từng trận tìm được
+                        Console.WriteLine($"[DEBUG] Tìm thấy trận {matchId}: vs {opponent} ({result})"); // <--- LOG 3
+
                         sb.Append($"{matchId}|{time:dd/MM HH:mm}|{opponent}|{result}$");
                     }
+
+                    Console.WriteLine($"[DEBUG] Tổng cộng tìm thấy: {count} trận."); // <--- LOG 4
+
                     // Gửi về Client
-                    writer.WriteLine($"HISTORY_DATA|{sb.ToString()}");
+                    string finalString = sb.ToString();
+                    writer.WriteLine($"HISTORY_DATA|{finalString}");
+                    Console.WriteLine($"[DEBUG] Đã gửi gói tin: HISTORY_DATA|{finalString}"); // <--- LOG 5
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Lỗi SendHistory: " + ex.Message);
+                Console.WriteLine("[ERROR] Lỗi SendHistory: " + ex.Message);
                 writer.WriteLine("MESSAGE|Lỗi lấy lịch sử!");
             }
         }
@@ -1646,5 +1701,37 @@ namespace CaroServer
                 }
             }
         }
+        // --- [NEW] HÀM LẤY ĐIỂM ELO HIỆN TẠI TỪ DB ---
+        static int GetPlayerElo(int userId)
+        {
+            try
+            {
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    SqlCommand cmd = new SqlCommand("SELECT Diem FROM NguoiChoi WHERE ID = @id", conn);
+                    cmd.Parameters.AddWithValue("@id", userId);
+                    object result = cmd.ExecuteScalar();
+                    return result != null ? (int)result : 1000; // Mặc định 1000 nếu lỗi
+                }
+            }
+            catch { return 1000; }
+        }
+
+        // --- [NEW] CÔNG THỨC TÍNH ELO CHUẨN QUỐC TẾ ---
+        // ratingA: Điểm hiện tại của mình
+        // ratingB: Điểm hiện tại của đối thủ
+        // actualScore: 1.0 (Thắng), 0.5 (Hòa), 0.0 (Thua)
+        // kFactor: Hệ số K (thường là 30 hoặc 32). K càng cao điểm nhảy càng nhanh.
+        static int CalculateNewElo(int ratingA, int ratingB, double actualScore, int kFactor = 32)
+        {
+            // Tính điểm kỳ vọng (Công thức xác suất thắng)
+            double expectedScore = 1.0 / (1.0 + Math.Pow(10.0, (ratingB - ratingA) / 400.0));
+
+            // Công thức Elo: Điểm mới = Điểm cũ + K * (Kết quả thực - Kỳ vọng)
+            return (int)(ratingA + kFactor * (actualScore - expectedScore));
+        }
+
+
     }
 }

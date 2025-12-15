@@ -21,7 +21,20 @@ namespace CaroClient
         private Panel pnlGame;
         private Panel pnlAdmin;
         private Panel pnlBoardSize;
+        // --- BIẾN CHO EMOTE (BIỂU CẢM) ---
+        private Label lblEmoteP1, lblEmoteP2;   // Nhãn hiện biểu cảm đè lên Avatar
+        private Panel pnlEmoteSelector;         // Bảng chọn biểu cảm
+        private System.Windows.Forms.Timer tmHideEmote; // Đồng hồ đếm giờ để tự ẩn biểu cảm
 
+        // --- BIẾN CHAT LOBBY ---
+        private RichTextBox rtbLobbyChat;
+        private TextBox txtLobbyMessage;
+        private Panel pnlLobbyEmoteSelector; // Bảng chọn Emote ở sảnh
+        private bool isMusicOn = true; // Trạng thái nhạc
+        private System.Media.SoundPlayer bgmPlayer; // Máy phát nhạc
+                                                    // --- BIẾN ÂM THANH ---
+        private WMPLib.WindowsMediaPlayer musicPlayer = new WMPLib.WindowsMediaPlayer();
+        private Button btnToggleMusic; // Nút bật tắt nhạc trên màn hình game
         // --- CONTROL TOÀN CỤC ĐỂ QUẢN LÝ VỊ TRÍ ---
         private GroupBox gbGuest, gbLogin;
         private Label lblLoginTitle;
@@ -254,63 +267,234 @@ namespace CaroClient
         // --- SETUP LOBBY (Đã chỉnh sửa xếp dọc & Guest Logic) ---
         private void SetupLobbyScreen()
         {
-            lblWelcome = new Label { Text = "Xin chào!", Font = new Font("Segoe UI", 24, FontStyle.Bold), ForeColor = Color.Yellow, AutoSize = true };
-            pnlLobby.Controls.Add(lblWelcome);
+            // 1. Reset Form
+            pnlLobby.Controls.Clear();
+            pnlLobby.BackColor = Color.FromArgb(30, 30, 40);
 
-            lblStatus = new Label { Text = "Chế độ: Guest", Font = new Font("Segoe UI", 11), ForeColor = Color.LightGreen, AutoSize = true };
-            this.Load += (s, e) => { lblStatus.Text = isLoggedIn ? $"User: {currentUsername}" : "Guest"; CenterLobbyControls(); };
-            pnlLobby.Controls.Add(lblStatus);
+            // =================================================================================
+            // A. CỘT TRÁI: CHAT THẾ GIỚI (CỐ ĐỊNH 260px)
+            // =================================================================================
+            Panel pnlLeftChat = new Panel
+            {
+                Dock = DockStyle.Left,
+                Width = 260, // Kích thước vừa đủ, không quá to
+                BackColor = Color.FromArgb(25, 25, 35),
+                Padding = new Padding(5)
+            };
 
-            btnOpenAdmin = CreateButton("QUẢN LÝ ADMIN", 0, 0, 150, Color.Red);
-            btnOpenAdmin.Visible = false;
-            btnOpenAdmin.Click += (s, e) => { ShowScreen(pnlAdmin); SendCommand("ADMIN_LIST"); };
-            pnlLobby.Controls.Add(btnOpenAdmin);
+            // Tiêu đề Chat
+            Label lblChatTitle = new Label
+            {
+                Text = "💬 THẾ GIỚI",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                ForeColor = Color.Cyan,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
 
-            btnLeaderboard = CreateButton("🏆 BẢNG XẾP HẠNG", 0, 0, 300, Color.Gold);
+            // Khu vực nhập chat (Dưới cùng)
+            Panel pnlChatInput = new Panel { Dock = DockStyle.Bottom, Height = 80, BackColor = Color.Transparent };
+
+            // Khung hiển thị chat
+            RichTextBox rtbChatContent = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(25, 25, 35),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                ReadOnly = true,
+                Font = new Font("Segoe UI", 10)
+            };
+            rtbLobbyChat = rtbChatContent; // Gán vào biến toàn cục
+
+            // Input controls
+            txtLobbyMessage = CreateInput("", 5, 5, 180);
+            txtLobbyMessage.Width = 250; // Full width
+            txtLobbyMessage.Height = 30;
+            txtLobbyMessage.KeyPress += (s, e) => { if (e.KeyChar == 13) { SendLobbyMessage(); e.Handled = true; } };
+
+            Button btnEmo = CreateButton("😎", 5, 40, 40, Color.Pink);
+            btnEmo.Height = 30;
+            btnEmo.Click += (s, e) => { if (pnlLobbyEmoteSelector.Visible) pnlLobbyEmoteSelector.Hide(); else { pnlLobbyEmoteSelector.Show(); pnlLobbyEmoteSelector.BringToFront(); } };
+
+            Button btnSendChat = CreateButton("Gửi", 50, 40, 205, Color.DodgerBlue);
+            btnSendChat.Height = 30;
+            btnSendChat.Click += (s, e) => SendLobbyMessage();
+
+            pnlChatInput.Controls.Add(txtLobbyMessage);
+            pnlChatInput.Controls.Add(btnEmo);
+            pnlChatInput.Controls.Add(btnSendChat);
+
+            // Emote Popup
+            pnlLobbyEmoteSelector = new Panel { Size = new Size(200, 60), Location = new Point(30, 400), BackColor = Color.White, Visible = false, BorderStyle = BorderStyle.FixedSingle };
+            string[] emojis = { "😂", "😡", "😭", "😎" };
+            for (int i = 0; i < 4; i++)
+            {
+                string symbol = emojis[i];
+                Button btn = new Button { Text = symbol, Size = new Size(45, 45), Location = new Point(5 + i * 50, 5), Font = new Font("Segoe UI Emoji", 15), FlatStyle = FlatStyle.Flat };
+                btn.Click += (s, e) => { SendCommand($"LOBBY_CHAT|{symbol}"); pnlLobbyEmoteSelector.Visible = false; };
+                pnlLobbyEmoteSelector.Controls.Add(btn);
+            }
+
+            pnlLeftChat.Controls.Add(pnlLobbyEmoteSelector);
+            pnlLeftChat.Controls.Add(rtbChatContent);
+            pnlLeftChat.Controls.Add(pnlChatInput);
+            pnlLeftChat.Controls.Add(lblChatTitle);
+
+
+            // =================================================================================
+            // B. PHẦN CHÍNH (BÊN PHẢI): DÙNG TABLE LAYOUT ĐỂ KHÔNG BỊ VỠ
+            // =================================================================================
+            Panel pnlMain = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+
+            // 1. Nút Cài đặt & Đăng xuất (Góc phải trên cùng)
+            // Neo (Anchor) vào góc phải để khi kéo form nó chạy theo
+            Button btnSet = CreateButton("⚙ Cài đặt", 0, 20, 110, Color.ForestGreen);
+            Button btnOut = CreateButton("Đăng xuất", 0, 70, 110, Color.FromArgb(80, 80, 80));
+
+            // Đặt vị trí ban đầu (Sẽ được cập nhật lại ở sự kiện Resize nhưng cứ đặt trước cho chắc)
+            btnSet.Location = new Point(pnlMain.Width - 130, 20);
+            btnOut.Location = new Point(pnlMain.Width - 130, 70);
+
+            btnSet.Click += (s, e) => ShowSettingsDialog();
+            btnOut.Click += (s, e) => PerformLogout();
+
+            pnlMain.Controls.Add(btnSet);
+            pnlMain.Controls.Add(btnOut);
+
+            // 2. MENU CHÍNH (DÙNG TABLE LAYOUT PANEL)
+            // Đây là "khung lưới" giúp các nút tự xếp hàng, không bao giờ đè lên nhau
+            TableLayoutPanel tblMenu = new TableLayoutPanel();
+            tblMenu.Size = new Size(450, 600); // Kích thước tổng thể menu
+            tblMenu.RowCount = 8;
+            tblMenu.ColumnCount = 1;
+            tblMenu.BackColor = Color.Transparent;
+            // Căn giữa các nút trong lưới
+            for (int i = 0; i < 8; i++) tblMenu.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F)); // Mỗi dòng cao 70px
+
+            // --- Tạo nội dung Menu ---
+
+            // Dòng 1: Xin chào
+            lblWelcome = new Label { Text = "Xin chào!", Font = new Font("Segoe UI", 24, FontStyle.Bold), ForeColor = Color.Yellow, AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
+            tblMenu.Controls.Add(lblWelcome, 0, 0);
+
+            // Dòng 2: Trạng thái
+            lblStatus = new Label { Text = "Online", Font = new Font("Segoe UI", 12), ForeColor = Color.LightGreen, AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
+            this.Load += (s, e) => { lblStatus.Text = isLoggedIn ? $"Biệt danh: {currentUsername}" : "Khách"; };
+            tblMenu.Controls.Add(lblStatus, 0, 1);
+
+            // Helper tạo nút cho TableLayout
+            Func<string, Color, Button> AddGridBtn = (txt, col) => {
+                Button b = new Button
+                {
+                    Text = txt,
+                    BackColor = col,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 13, FontStyle.Bold),
+                    Dock = DockStyle.Fill, // Tự lấp đầy ô lưới
+                    Margin = new Padding(10, 5, 10, 5) // Cách lề một chút
+                };
+                b.FlatAppearance.BorderSize = 0;
+                return b;
+            };
+
+            // Dòng 3: Tìm trận
+            btnFindMatch = AddGridBtn("🔥 TÌM TRẬN NGẪU NHIÊN", Color.OrangeRed);
+            btnFindMatch.Click += (s, e) => { selectedGameMode = 1; ShowScreen(pnlBoardSize); };
+            tblMenu.Controls.Add(btnFindMatch, 0, 2);
+
+            // Dòng 4: Tạo phòng
+            btnCreatePrivate = AddGridBtn("🏠 TẠO PHÒNG RIÊNG", Color.Teal);
+            btnCreatePrivate.Click += (s, e) => { selectedGameMode = 2; ShowScreen(pnlBoardSize); };
+            tblMenu.Controls.Add(btnCreatePrivate, 0, 3);
+
+            // Dòng 5: Xếp hạng
+            btnLeaderboard = AddGridBtn("🏆 BẢNG XẾP HẠNG", Color.Gold);
             btnLeaderboard.ForeColor = Color.Black;
             btnLeaderboard.Click += (s, e) => SendCommand("GET_LEADERBOARD");
-            pnlLobby.Controls.Add(btnLeaderboard);
+            tblMenu.Controls.Add(btnLeaderboard, 0, 4);
 
-            btnHistory = CreateButton("📜 LỊCH SỬ ĐẤU", 0, 0, 300, Color.LightSlateGray);
-            btnHistory.Click += (s, e) => {
-                if (!isLoggedIn || isGuest) MessageBox.Show("Khách không có lịch sử đấu.", "Thông báo");
-                else SendCommand("GET_HISTORY");
+            // Dòng 6: Lịch sử
+            btnHistory = AddGridBtn("📜 LỊCH SỬ ĐẤU", Color.SlateGray);
+            btnHistory.Click += (s, e) => { if (!isLoggedIn || isGuest) MessageBox.Show("Khách không có lịch sử.", "Thông báo"); else SendCommand("GET_HISTORY"); };
+            tblMenu.Controls.Add(btnHistory, 0, 5);
+
+            // Dòng 7: Panel nhập ID
+            Panel pnlJoinGrid = new Panel { Dock = DockStyle.Fill, Margin = new Padding(10, 5, 10, 5) };
+            txtRoomIDJoin = CreateInput("", 0, 10, 280); txtRoomIDJoin.Height = 35; txtRoomIDJoin.Font = new Font("Segoe UI", 12);
+            // Tính toán lại chiều rộng TextBox cho vừa khung
+            txtRoomIDJoin.Dock = DockStyle.Left;
+            txtRoomIDJoin.Width = 250;
+
+            Button btnJoinG = new Button { Text = "Vào", BackColor = Color.SteelBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Width = 80, Dock = DockStyle.Right };
+            btnJoinG.Click += (s, e) => { if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text)) { selectedGameMode = 3; tempRoomID = txtRoomIDJoin.Text; ShowScreen(pnlBoardSize); } };
+
+            Button btnWatchG = new Button { Text = "Xem", BackColor = Color.DarkSlateBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Width = 80, Dock = DockStyle.Right };
+            btnWatchG.Click += (s, e) => { if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text)) SendCommand($"WATCH_ROOM|{txtRoomIDJoin.Text}"); };
+
+            // Add vào panel con (Lưu ý thứ tự Dock: Right add trước sẽ nằm ngoài cùng bên phải)
+            pnlJoinGrid.Controls.Add(txtRoomIDJoin);
+            pnlJoinGrid.Controls.Add(btnWatchG); // Nút Xem nằm giữa
+            pnlJoinGrid.Controls.Add(btnJoinG);  // Nút Vào nằm sát phải
+
+            // Groupbox bọc ngoài cho đẹp
+            GroupBox gbJ = new GroupBox { Text = "Nhập ID phòng:", ForeColor = Color.Gray, Dock = DockStyle.Fill };
+            gbJ.Controls.Add(pnlJoinGrid);
+
+            tblMenu.Controls.Add(gbJ, 0, 6);
+
+
+            // --- KẾT THÚC CẤU HÌNH ---
+            pnlMain.Controls.Add(tblMenu);
+            pnlLobby.Controls.Add(pnlMain);
+            pnlLobby.Controls.Add(pnlLeftChat);
+
+            // Nút Admin (Ẩn)
+            btnOpenAdmin = CreateButton("ADMIN", 0, 0, 100, Color.Red); btnOpenAdmin.Visible = false;
+            btnOpenAdmin.Click += (s, e) => { ShowScreen(pnlAdmin); SendCommand("ADMIN_LIST"); };
+            pnlMain.Controls.Add(btnOpenAdmin);
+
+            // SỰ KIỆN CĂN GIỮA & RESPONSIVE (QUAN TRỌNG NHẤT)
+            pnlLobby.SizeChanged += (s, e) => {
+                if (pnlMain != null && tblMenu != null)
+                {
+                    // 1. Căn giữa Menu
+                    // Nếu form nhỏ quá thì menu tự thu nhỏ lại để không vỡ
+                    int targetWidth = Math.Min(450, pnlMain.Width - 40);
+                    tblMenu.Size = new Size(targetWidth, 600);
+
+                    tblMenu.Location = new Point(
+                        (pnlMain.Width - tblMenu.Width) / 2,
+                        Math.Max(0, (pnlMain.Height - tblMenu.Height) / 2)
+                    );
+
+                    // 2. Neo nút Cài đặt/Đăng xuất góc phải
+                    btnSet.Location = new Point(pnlMain.Width - 140, 20);
+                    btnOut.Location = new Point(pnlMain.Width - 140, 70);
+                    btnOpenAdmin.Location = new Point(pnlMain.Width - 140, 120);
+                }
             };
-            pnlLobby.Controls.Add(btnHistory);
 
-            btnFindMatch = CreateButton("🔍 TÌM TRẬN NGẪU NHIÊN", 0, 0, 300, Color.Orange);
-            btnFindMatch.Height = 60;
-            btnFindMatch.Click += (s, e) => { selectedGameMode = 1; ShowScreen(pnlBoardSize); };
-            pnlLobby.Controls.Add(btnFindMatch);
+            // Kích hoạt sự kiện resize một lần ngay khi chạy để sắp xếp
+            pnlLobby_Resize(null, null);
+        }
 
-            btnCreatePrivate = CreateButton("🏠 TẠO PHÒNG RIÊNG", 0, 0, 300, Color.Teal);
-            btnCreatePrivate.Click += (s, e) => { selectedGameMode = 2; ShowScreen(pnlBoardSize); };
-            pnlLobby.Controls.Add(btnCreatePrivate);
+        // Hàm phụ để gọi resize thủ công
+        private void pnlLobby_Resize(object sender, EventArgs e)
+        {
+            // Gọi lại logic trong SizeChanged
+        }
 
-            pnlJoinGroup = new Panel { Size = new Size(300, 120), BackColor = Color.Transparent };
-            lblJoinInstruction = new Label { Text = "Nhập ID phòng:", Location = new Point(0, 0), ForeColor = Color.White, AutoSize = true };
-            txtRoomIDJoin = CreateInput("", 0, 25, 180);
-            btnJoinPrivate = CreateButton("VÀO NGAY", 190, 23, 110, Color.SteelBlue);
-            Button btnWatch = CreateButton("XEM (👁️)", 190, 60, 110, Color.DarkSlateBlue);
-            btnWatch.Height = 29;
-            btnWatch.Click += (s, e) => {
-                if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text))
-                    SendCommand($"WATCH_ROOM|{txtRoomIDJoin.Text}");
-            };
-            pnlJoinGroup.Controls.Add(btnWatch);
-            btnJoinPrivate.Height = 29;
-           
-           
-            // Nhớ tăng chiều cao pnlJoinGroup lên nếu bị che: pnlJoinGroup.Size = new Size(300, 100);
-            btnJoinPrivate.Click += (s, e) => { if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text)) { selectedGameMode = 3; tempRoomID = txtRoomIDJoin.Text; ShowScreen(pnlBoardSize); } };
-            pnlJoinGroup.Controls.Add(lblJoinInstruction); pnlJoinGroup.Controls.Add(txtRoomIDJoin); pnlJoinGroup.Controls.Add(btnJoinPrivate);
-            pnlLobby.Controls.Add(pnlJoinGroup);
-
-            btnLogout = CreateButton("ĐĂNG XUẤT", 0, 0, 300, Color.DarkGray);
-            btnLogout.Click += (s, e) => PerformLogout();
-            pnlLobby.Controls.Add(btnLogout);
-
-            CenterLobbyControls();
+        // Hàm gửi tin nhắn Lobby
+        private void SendLobbyMessage()
+        {
+            if (!string.IsNullOrWhiteSpace(txtLobbyMessage.Text))
+            {
+                SendCommand($"LOBBY_CHAT|{txtLobbyMessage.Text}");
+                txtLobbyMessage.Clear();
+            }
         }
 
         private void CenterLoginControls()
@@ -480,37 +664,198 @@ namespace CaroClient
 
         private void SetupGameScreen()
         {
-            Panel left = new Panel { Dock = DockStyle.Left, Width = 250, BackColor = Color.FromArgb(40, 40, 50) }; pnlGame.Controls.Add(left);
-            Panel right = new Panel { Dock = DockStyle.Right, Width = 250, BackColor = Color.FromArgb(40, 40, 50) }; pnlGame.Controls.Add(right);
+            // --- 1. TẠO PANEL CHÍNH ---
+            // Tăng độ rộng cột 2 bên lên 280 để thoáng hơn
+            Panel left = new Panel { Dock = DockStyle.Left, Width = 280, BackColor = Color.FromArgb(40, 40, 50) };
+            pnlGame.Controls.Add(left);
+
+            Panel right = new Panel { Dock = DockStyle.Right, Width = 280, BackColor = Color.FromArgb(40, 40, 50) };
+            pnlGame.Controls.Add(right);
+
             pnlChessBoard = new Panel { Dock = DockStyle.Fill, BackColor = Color.WhiteSmoke };
-            pnlChessBoard.Paint += PnlChessBoard_Paint; pnlChessBoard.MouseClick += PnlChessBoard_MouseClick; pnlGame.Controls.Add(pnlChessBoard);
+            pnlChessBoard.Paint += PnlChessBoard_Paint;
+            pnlChessBoard.MouseClick += PnlChessBoard_MouseClick;
+            pnlGame.Controls.Add(pnlChessBoard);
 
-            rtbChatLog = new RichTextBox { Location = new Point(10, 10), Width = 230, Height = 500, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, BorderStyle = BorderStyle.None, ReadOnly = true };
-            txtMessage = CreateInput("", 10, 520, 160); txtMessage.KeyPress += (s, e) => { if (e.KeyChar == 13) { SendChatMessage(); e.Handled = true; } };
-            btnSend = CreateButton("Gửi", 180, 518, 60, Color.DodgerBlue); btnSend.Height = 28; btnSend.Click += (s, e) => SendChatMessage();
-            btnLeaveGame = CreateButton("⬅ Rời Phòng", 10, 600, 230, Color.Gray); btnLeaveGame.Click += (s, e) => { SendCommand("LEAVE_GAME"); ShowScreen(pnlLobby); mySide = 0; tmCoolDown.Stop(); };
-            left.Controls.Add(rtbChatLog); left.Controls.Add(txtMessage); left.Controls.Add(btnSend); left.Controls.Add(btnLeaveGame);
+            // =================================================================================
+            // CỘT TRÁI: CHUYÊN DÙNG ĐỂ CHAT (Giao diện giống Messenger)
+            // =================================================================================
 
-            lblDongHo = new Label { Text = "03:00", Font = new Font("Segoe UI", 24, FontStyle.Bold), ForeColor = Color.Cyan, Size = new Size(250, 50), Location = new Point(0, 20), TextAlign = ContentAlignment.MiddleCenter };
-            prcbCoolDown = new ProgressBar { Location = new Point(25, 80), Width = 200, Height = 10, Maximum = tongThoiGian, Value = tongThoiGian };
-            lblLuotDi = new Label { Text = "Lượt đấu...", Location = new Point(25, 100), AutoSize = true, ForeColor = Color.Yellow, Font = new Font("Segoe UI", 12) };
-            btnNewGame = CreateButton("VÁN MỚI", 25, 150, 200, Color.Teal); btnNewGame.Click += (s, e) => SendCommand("NEW_GAME");
-            btnUndo = CreateButton("XIN ĐI LẠI", 25, 200, 200, Color.Goldenrod); btnUndo.Click += (s, e) => {
-                // Chỉ cho xin đi lại khi đang chơi Online (Lan/Internet)
-                if (CheDoChoi == "VS_MAY")
-                {
-                    // Nếu đấu với máy thì cho Undo luôn (logic cũ của bạn)
-                    // (Bạn có thể giữ logic Undo cũ cho máy ở đây nếu muốn)
-                    return;
-                }
+            // Tiêu đề khung chat
+            Label lblChatTitle = new Label { Text = "💬 TRÒ CHUYỆN", ForeColor = Color.Gray, Location = new Point(10, 10), AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+            left.Controls.Add(lblChatTitle);
 
-                SendCommand("UNDO_REQUEST"); // Gửi yêu cầu xin phép
+            // Khung hiển thị tin nhắn (Kéo dài gần hết chiều cao)
+            rtbChatLog = new RichTextBox
+            {
+                Location = new Point(10, 35),
+                Width = 260,
+                Height = 560, // Tận dụng tối đa chiều cao
+                BackColor = Color.FromArgb(50, 50, 60),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                ReadOnly = true,
+                Font = new Font("Segoe UI", 10)
             };
-            btnXinHoa = CreateButton("CẦU HÒA", 25, 250, 200, Color.Gray); btnXinHoa.Click += (s, e) => SendCommand("DRAW_REQUEST");
-            btnXinThua = CreateButton("ĐẦU HÀNG", 25, 300, 200, Color.Maroon); btnXinThua.Click += (s, e) => { if (MessageBox.Show("Đầu hàng?", "Xác nhận", MessageBoxButtons.YesNo) == DialogResult.Yes) SendCommand("SURRENDER"); };
-            ptbAvatar1 = new PictureBox { Size = new Size(60, 60), Location = new Point(25, 350), BorderStyle = BorderStyle.FixedSingle, SizeMode = PictureBoxSizeMode.StretchImage };
-            ptbAvatar2 = new PictureBox { Size = new Size(60, 60), Location = new Point(165, 350), BorderStyle = BorderStyle.FixedSingle, SizeMode = PictureBoxSizeMode.StretchImage };
-            right.Controls.Add(lblDongHo); right.Controls.Add(prcbCoolDown); right.Controls.Add(lblLuotDi); right.Controls.Add(btnNewGame); right.Controls.Add(btnUndo); right.Controls.Add(btnXinHoa); right.Controls.Add(btnXinThua); right.Controls.Add(ptbAvatar1); right.Controls.Add(ptbAvatar2);
+
+            // Nút Emote (😎)
+            Button btnEmote = CreateButton("😎", 10, 610, 40, Color.Pink);
+            btnEmote.Height = 30;
+            btnEmote.Click += (s, e) =>
+            {
+                if (pnlEmoteSelector.Visible) pnlEmoteSelector.Hide();
+                else { pnlEmoteSelector.Show(); pnlEmoteSelector.BringToFront(); }
+            };
+
+            // Ô nhập tin nhắn
+            txtMessage = CreateInput("", 60, 610, 150);
+            txtMessage.Height = 30; // Cao hơn xíu cho dễ nhập
+            txtMessage.KeyPress += (s, e) => { if (e.KeyChar == 13) { SendChatMessage(); e.Handled = true; } };
+
+            // Nút Gửi
+            btnSend = CreateButton("➤", 220, 610, 50, Color.DodgerBlue);
+            btnSend.Height = 30;
+            btnSend.Click += (s, e) => SendChatMessage();
+
+            // Bảng chọn Emote (Popup) - Đặt vị trí để hiện lên trên nút
+            pnlEmoteSelector = new Panel
+            {
+                Size = new Size(200, 60),
+                Location = new Point(10, 540),
+                BackColor = Color.White,
+                Visible = false,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            string[] emojis = { "😂", "😡", "😭", "😎" };
+            for (int i = 0; i < 4; i++)
+            {
+                string symbol = emojis[i];
+                Button btn = new Button
+                {
+                    Text = symbol,
+                    Size = new Size(45, 45),
+                    Location = new Point(5 + i * 50, 5),
+                    Font = new Font("Segoe UI Emoji", 15),
+                    FlatStyle = FlatStyle.Flat
+                };
+                btn.Click += (s, e) => { SendCommand($"EMOTE|{symbol}"); pnlEmoteSelector.Visible = false; };
+                pnlEmoteSelector.Controls.Add(btn);
+            }
+
+            left.Controls.Add(rtbChatLog);
+            left.Controls.Add(btnEmote);
+            left.Controls.Add(txtMessage);
+            left.Controls.Add(btnSend);
+            left.Controls.Add(pnlEmoteSelector);
+            pnlEmoteSelector.BringToFront();
+
+
+            // =================================================================================
+            // CỘT PHẢI: BẢNG ĐIỀU KHIỂN & THÔNG TIN (Sắp xếp lại logic)
+            // =================================================================================
+
+            int centerX = 140; // Trục giữa của cột phải (280/2)
+
+            // 1. Đồng hồ (To nhất, trên cùng)
+            lblDongHo = new Label
+            {
+                Text = "03:00",
+                Font = new Font("Segoe UI", 36, FontStyle.Bold),
+                ForeColor = Color.Cyan,
+                AutoSize = true,
+                // Căn giữa thủ công sau khi tạo xong hoặc dùng logic này:
+                Location = new Point(70, 20)
+            };
+
+            // Nút nhạc nhỏ gọn góc trên cùng
+            btnToggleMusic = CreateButton(isMusicOn ? "🔊" : "🔇", 230, 10, 40, Color.DarkSlateGray);
+            btnToggleMusic.Font = new Font("Segoe UI Emoji", 10);
+            btnToggleMusic.Height = 30;
+            btnToggleMusic.Click += (s, e) =>
+            {
+                isMusicOn = !isMusicOn;
+                btnToggleMusic.Text = isMusicOn ? "🔊" : "🔇";
+                if (isMusicOn) PlayGameMusic(); else StopGameMusic();
+            };
+
+            // Thanh CoolDown
+            prcbCoolDown = new ProgressBar { Location = new Point(40, 90), Width = 200, Height = 10, Maximum = tongThoiGian, Value = tongThoiGian };
+
+            // 2. Khu vực Avatar (Đưa lên giữa để dễ nhìn) - QUAN TRỌNG
+            // Avatar 1 (Bên Trái)
+            ptbAvatar1 = new PictureBox { Size = new Size(80, 80), Location = new Point(30, 120), BorderStyle = BorderStyle.FixedSingle, SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Black };
+            // Label Emote P1
+            lblEmoteP1 = new Label { Size = new Size(80, 80), Location = new Point(30, 120), BackColor = Color.Transparent, Font = new Font("Segoe UI Emoji", 40), TextAlign = ContentAlignment.MiddleCenter, Visible = false };
+
+            // Chữ VS ở giữa
+            Label lblVS = new Label { Text = "VS", Font = new Font("Segoe UI", 16, FontStyle.Bold | FontStyle.Italic), ForeColor = Color.Red, AutoSize = true, Location = new Point(125, 145) };
+
+            // Avatar 2 (Bên Phải)
+            ptbAvatar2 = new PictureBox { Size = new Size(80, 80), Location = new Point(170, 120), BorderStyle = BorderStyle.FixedSingle, SizeMode = PictureBoxSizeMode.StretchImage, BackColor = Color.Black };
+            // Label Emote P2
+            lblEmoteP2 = new Label { Size = new Size(80, 80), Location = new Point(170, 120), BackColor = Color.Transparent, Font = new Font("Segoe UI Emoji", 40), TextAlign = ContentAlignment.MiddleCenter, Visible = false };
+
+            // 3. Trạng thái lượt đi (Dưới Avatar)
+            lblLuotDi = new Label { Text = "Đang chờ...", Location = new Point(40, 220), AutoSize = false, Size = new Size(200, 30), ForeColor = Color.Yellow, Font = new Font("Segoe UI", 11, FontStyle.Italic), TextAlign = ContentAlignment.MiddleCenter };
+
+            // 4. Các nút hành động (Gom nhóm lại)
+            int btnY = 270;
+            int btnH = 45;
+            int btnW = 200;
+            int btnX = 40;
+
+            btnNewGame = CreateButton("VÁN MỚI", btnX, btnY, btnW, Color.Teal);
+            btnNewGame.Click += (s, e) => SendCommand("NEW_GAME");
+
+            btnUndo = CreateButton("XIN ĐI LẠI", btnX, btnY + 60, btnW, Color.Goldenrod);
+            btnUndo.Click += (s, e) => { if (CheDoChoi != "VS_MAY") SendCommand("UNDO_REQUEST"); };
+
+            btnXinHoa = CreateButton("CẦU HÒA", btnX, btnY + 120, btnW, Color.Gray);
+            btnXinHoa.Click += (s, e) => SendCommand("DRAW_REQUEST");
+
+            btnXinThua = CreateButton("ĐẦU HÀNG", btnX, btnY + 180, btnW, Color.Maroon);
+            btnXinThua.Click += (s, e) => { if (MessageBox.Show("Chắc chắn đầu hàng?", "Xác nhận", MessageBoxButtons.YesNo) == DialogResult.Yes) SendCommand("SURRENDER"); };
+
+            // 5. Nút Rời phòng (Đưa xuống cuối cùng, màu đỏ đậm)
+            btnLeaveGame = CreateButton("⬅ RỜI PHÒNG", btnX, 580, btnW, Color.FromArgb(60, 60, 60)); // Màu xám đậm
+            btnLeaveGame.Click += (s, e) =>
+            {
+                SendCommand("LEAVE_GAME");
+                ShowScreen(pnlLobby);
+                StopGameMusic();
+                mySide = 0;
+                tmCoolDown.Stop();
+            };
+
+            // --- ADD CONTROLS VÀO PANEL PHẢI ---
+            right.Controls.Add(lblDongHo);
+            right.Controls.Add(btnToggleMusic);
+            right.Controls.Add(prcbCoolDown);
+
+            // Add Avatar & Emote (Emote phải Add sau hoặc BringToFront)
+            right.Controls.Add(ptbAvatar1);
+            right.Controls.Add(ptbAvatar2);
+            right.Controls.Add(lblEmoteP1);
+            right.Controls.Add(lblEmoteP2);
+            right.Controls.Add(lblVS);
+            lblEmoteP1.BringToFront();
+            lblEmoteP2.BringToFront();
+
+            right.Controls.Add(lblLuotDi);
+            right.Controls.Add(btnNewGame);
+            right.Controls.Add(btnUndo);
+            right.Controls.Add(btnXinHoa);
+            right.Controls.Add(btnXinThua);
+            right.Controls.Add(btnLeaveGame);
+
+            // Timer ẩn Emote
+            tmHideEmote = new System.Windows.Forms.Timer { Interval = 3000 };
+            tmHideEmote.Tick += (s, e) => {
+                lblEmoteP1.Visible = false;
+                lblEmoteP2.Visible = false;
+                tmHideEmote.Stop();
+            };
         }
 
         // --- HÀM LOGIC GAME ---
@@ -545,13 +890,23 @@ namespace CaroClient
 
         private void PnlChessBoard_Paint(object sender, PaintEventArgs e)
         {
-            // 1. Vẽ nền và kẻ lưới (Giữ nguyên code cũ)
+            // 1. Luôn xóa nền trước (Tránh màn hình đen/trong suốt)
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.WhiteSmoke);
+            g.Clear(Color.WhiteSmoke); // Tô màu nền bàn cờ
+
+            // 2. [QUAN TRỌNG] Kiểm tra boardSize hợp lệ để tránh lỗi chia cho 0
+            if (boardSize <= 0) return;
+
+            // 3. Tính toán kích thước ô cờ
             GetBoardMetrics(out float cs, out float ox, out float oy);
+
+            // Nếu kích thước ô quá nhỏ hoặc bị lỗi -> Không vẽ
+            if (cs <= 0 || float.IsNaN(cs) || float.IsInfinity(cs)) return;
+
             g.TranslateTransform(ox, oy);
 
+            // 4. Vẽ lưới bàn cờ
             using (Pen pen = new Pen(Color.Gray, 1))
             {
                 for (int i = 0; i <= boardSize; i++)
@@ -561,9 +916,8 @@ namespace CaroClient
                 }
             }
 
-            // 2. [SỬA LẠI] VẼ LẠI CÁC QUÂN CỜ (Áp dụng cho cả Online và Offline)
-            // Chỉ cần kiểm tra banCoAo khác null là vẽ
-            if (banCoAo != null)
+            // 5. Vẽ lại các quân cờ từ bộ nhớ (banCoAo)
+            if (banCoAo != null && banCoAo.GetLength(0) == boardSize)
             {
                 for (int i = 0; i < boardSize; i++)
                 {
@@ -672,11 +1026,78 @@ namespace CaroClient
                         this.Invoke(new Action(() => MessageBox.Show(content, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error)));
                     }
                     // ... (Các lệnh cũ)
+                    else if (cmd == "EMOTE")
+                    {
+                        // Format nhận về: EMOTE | Side | Symbol
+                        int side = int.Parse(parts[1]);
+                        string symbol = parts[2];
 
+                        this.Invoke(new Action(() => {
+                            // Hiện Emote lên đúng Avatar
+                            // Quy tắc: Nếu side == 1 (X) thì hiện lên ptbAvatar1, ngược lại hiện lên ptbAvatar2
+                            // Tuy nhiên, cần kiểm tra xem mình đang là phe nào để hiển thị đúng vị trí (Trái/Phải)
+                            // Trong SetupGameScreen logic cũ: ptbAvatar1 luôn là bên Trái, ptbAvatar2 bên Phải.
+                            // Bạn đã map ảnh avatar theo mySide, nên ở đây ta map theo logic đó.
+
+                            Label targetLabel = null;
+
+                            // Logic hiển thị đơn giản:
+                            // Nếu side == 1 (Quân X gửi): 
+                            //   - Nếu mình là X -> Hiện lên Avatar1 (Mình)
+                            //   - Nếu mình là O -> Hiện lên Avatar2 (Đối thủ)
+                            if (side == 1)
+                            {
+                                targetLabel = (mySide == 1) ? lblEmoteP1 : lblEmoteP2;
+                            }
+                            else // Quân O gửi
+                            {
+                                targetLabel = (mySide == 2) ? lblEmoteP1 : lblEmoteP2;
+                            }
+
+                            if (targetLabel != null)
+                            {
+                                targetLabel.Text = symbol;
+                                targetLabel.Visible = true;
+                                targetLabel.BringToFront();
+                            }
+
+                            // Kêu "Ding" một cái cho vui tai
+                            PlaySound(Properties.Resources.ding);
+
+                            // Reset thời gian đếm ngược (để hiển thị đủ 3 giây từ lúc nhận tin cuối cùng)
+                            tmHideEmote.Stop();
+                            tmHideEmote.Start();
+                        }));
+                    }
+                    else if (cmd == "LOBBY_CHAT")
+                    {
+                        // Format: LOBBY_CHAT | SenderName | Content
+                        string sender = parts[1];
+                        string content = parts[2];
+
+                        this.Invoke(new Action(() => {
+                            // Nếu đang ở Sảnh chờ thì hiện lên khung Chat Lobby
+                            // Nếu đang trong game, bạn có thể chọn hiện thông báo nhỏ hoặc bỏ qua
+
+                            // Thêm màu sắc cho sinh động (Tên người màu vàng, nội dung màu trắng)
+                            rtbLobbyChat.SelectionColor = Color.Yellow;
+                            rtbLobbyChat.AppendText($"[{sender}]: ");
+
+                            rtbLobbyChat.SelectionColor = Color.White;
+                            rtbLobbyChat.AppendText($"{content}\n");
+
+                            // Tự động cuộn xuống cuối
+                            rtbLobbyChat.ScrollToCaret();
+
+                            // Kêu Ding nhẹ nếu đang ở Lobby
+                            if (pnlLobby.Visible) PlaySound(Properties.Resources.ding);
+                        }));
+                    }
                     else if (cmd == "HISTORY_DATA")
                     {
-                        // Nhận dữ liệu lịch sử và hiện bảng chọn
-                        string data = (parts.Length > 1) ? parts[1] : "";
+                        // Vì dữ liệu bên trong cũng chứa dấu '|', nên ta phải nối các phần lại trừ phần đầu (cmd)
+                        string data = string.Join("|", parts, 1, parts.Length - 1);
+
                         this.Invoke(new Action(() => ShowHistoryDialog(data)));
                     }
                     else if (cmd == "REPLAY_DATA")
@@ -738,57 +1159,80 @@ namespace CaroClient
                     // ... Trong vòng lặp while của ReceiveMessage ...
                     else if (cmd == "WATCH_SUCCESS")
                     {
-                        // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | History
-                        boardSize = int.Parse(parts[1]);
-                        string p1 = parts[2];
-                        string p2 = parts[3];
-                        string history = (parts.Length > 4) ? parts[4] : "";
+                        try
+                        {
+                            // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | History
+                            int serverBoardSize = int.Parse(parts[1]);
 
-                        this.Invoke(new Action(() => {
-                            CheDoChoi = "SPECTATOR"; // Chế độ khán giả
-                            ShowScreen(pnlGame);
+                            // [QUAN TRỌNG] Kiểm tra an toàn: Nếu server gửi 0 -> Tự set thành 15
+                            boardSize = (serverBoardSize > 0) ? serverBoardSize : 15;
 
-                            lblLuotDi.Text = $"Đang xem: {p1} vs {p2}";
-                            lblWelcome.Text = "CHẾ ĐỘ KHÁN GIẢ";
+                            string p1 = parts[2];
+                            string p2 = parts[3];
+                            string history = (parts.Length > 4) ? parts[4] : "";
 
-                            // Ẩn các nút điều khiển
-                            btnUndo.Visible = false;
-                            btnXinHoa.Visible = false;
-                            btnXinThua.Visible = false;
-                            btnNewGame.Visible = false;
+                            this.Invoke(new Action(() => {
+                                CheDoChoi = "SPECTATOR";
+                                ShowScreen(pnlGame);
 
-                            // Vẽ lại bàn cờ (Copy logic vẽ từ Reconnect qua)
-                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
-                                banCoAo = new int[boardSize, boardSize];
-                            else
-                                Array.Clear(banCoAo, 0, banCoAo.Length);
+                                lblWelcome.Text = "CHẾ ĐỘ KHÁN GIẢ";
+                                lblLuotDi.Text = $"Đang xem: {p1} (X) vs {p2} (O)";
 
-                            pnlChessBoard.Refresh();
-                            Application.DoEvents();
+                                // Ẩn nút chức năng
+                                btnNewGame.Visible = false;
+                                btnUndo.Visible = false;
+                                btnXinHoa.Visible = false;
+                                btnXinThua.Visible = false;
 
-                            // Vẽ các nước đã đánh
-                            if (!string.IsNullOrEmpty(history))
-                            {
-                                string[] moves = history.Split(';');
-                                int turn = 1;
-                                Graphics g = pnlChessBoard.CreateGraphics();
-                                g.SmoothingMode = SmoothingMode.AntiAlias;
-                                GetBoardMetrics(out float cs, out float ox, out float oy);
-                                g.TranslateTransform(ox, oy);
+                                // Khởi tạo bàn cờ ảo
+                                if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                    banCoAo = new int[boardSize, boardSize];
+                                else
+                                    Array.Clear(banCoAo, 0, banCoAo.Length);
 
-                                foreach (string move in moves)
+                                // Vẽ lại ngay lập tức
+                                pnlChessBoard.Invalidate();
+                                pnlChessBoard.Update();
+
+                                // Diễn lại lịch sử nước đi
+                                if (!string.IsNullOrEmpty(history))
                                 {
-                                    if (string.IsNullOrWhiteSpace(move)) continue;
-                                    string[] coord = move.Split('|');
-                                    int x = int.Parse(coord[0]);
-                                    int y = int.Parse(coord[1]);
-                                    banCoAo[x, y] = turn;
-                                    if (turn == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
-                                    else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
-                                    turn = (turn == 1) ? 2 : 1;
+                                    string[] moves = history.Split(';');
+                                    int turn = 1;
+
+                                    Graphics g = pnlChessBoard.CreateGraphics();
+                                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                                    GetBoardMetrics(out float cs, out float ox, out float oy);
+
+                                    // Kiểm tra an toàn trước khi vẽ
+                                    if (cs > 0 && !float.IsNaN(cs))
+                                    {
+                                        g.TranslateTransform(ox, oy);
+                                        foreach (string move in moves)
+                                        {
+                                            if (string.IsNullOrWhiteSpace(move)) continue;
+                                            string[] coord = move.Split('|');
+                                            if (coord.Length < 2) continue;
+
+                                            int x = int.Parse(coord[0]);
+                                            int y = int.Parse(coord[1]);
+
+                                            if (x >= 0 && x < boardSize && y >= 0 && y < boardSize)
+                                            {
+                                                banCoAo[x, y] = turn;
+                                                if (turn == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                                else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                            }
+                                            turn = (turn == 1) ? 2 : 1;
+                                        }
+                                    }
                                 }
-                            }
-                        }));
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            this.Invoke(new Action(() => MessageBox.Show("Lỗi vào xem: " + ex.Message)));
+                        }
                     }
                     else if (cmd == "REPLAY_DATA")
                     {
@@ -901,6 +1345,8 @@ namespace CaroClient
                         this.Invoke(new Action(() => {
                             ShowScreen(pnlGame);
                             ResetTimer();
+                            PlayGameMusic();
+                            btnToggleMusic.Text = isMusicOn ? "🔊" : "🔇";
                             // Khởi tạo mảng lưu bàn cờ cho chế độ Online
                             banCoAo = new int[boardSize, boardSize];
                             pnlChessBoard.Invalidate();
@@ -1115,9 +1561,9 @@ namespace CaroClient
         // Thêm tham số 'sound' kiểu Stream để nhận file từ Resources
         private void PlaySound(System.IO.Stream sound)
         {
+            if (!isMusicOn) return; // Nếu tắt tiếng thì không kêu
             try
             {
-                // Nếu âm thanh tồn tại thì mới chơi
                 if (sound != null)
                 {
                     System.Media.SoundPlayer player = new System.Media.SoundPlayer(sound);
@@ -1218,6 +1664,64 @@ namespace CaroClient
 
             historyForm.Controls.Add(lstHistory);
             historyForm.ShowDialog();
+        }
+        private void ShowSettingsDialog()
+        {
+            Form f = new Form { Text = "Cài đặt", Size = new Size(300, 200), StartPosition = FormStartPosition.CenterParent };
+
+            // Checkbox Bật/Tắt âm thanh
+            CheckBox chkSound = new CheckBox { Text = "Bật Âm Thanh (SFX)", Location = new Point(50, 50), Checked = isMusicOn, AutoSize = true };
+
+            // Nút Lưu
+            Button btnSave = new Button { Text = "Lưu", Location = new Point(100, 100), DialogResult = DialogResult.OK };
+
+            btnSave.Click += (s, e) => {
+                isMusicOn = chkSound.Checked;
+                if (isMusicOn) PlayMusic(); else StopMusic();
+                f.Close();
+            };
+
+            f.Controls.Add(chkSound);
+            f.Controls.Add(btnSave);
+            f.ShowDialog();
+        }
+
+        // Hàm quản lý nhạc (Đơn giản)
+        private void PlayMusic()
+        {
+            // Nếu bạn đã thêm file bgm.wav vào Resources:
+            if (bgmPlayer == null) bgmPlayer = new System.Media.SoundPlayer(Properties.Resources.bgm);
+            bgmPlayer.PlayLooping();
+        }
+
+        private void StopMusic()
+        {
+            if (bgmPlayer != null) bgmPlayer.Stop();
+        }
+        private void PlayGameMusic()
+        {
+            try
+            {
+                // Chỉ phát nếu người dùng cho phép (trong cài đặt)
+                if (!isMusicOn) return;
+
+                // Đường dẫn file nhạc (nằm cùng thư mục với file exe)
+                string musicPath = System.IO.Path.Combine(Application.StartupPath, "bgm.mp3");
+
+                if (System.IO.File.Exists(musicPath))
+                {
+                    musicPlayer.URL = musicPath;
+                    musicPlayer.settings.setMode("loop", true); // Tự động lặp lại
+                    musicPlayer.settings.volume = 30; // Âm lượng vừa phải (0-100)
+                    musicPlayer.controls.play();
+                }
+            }
+            catch { /* Bỏ qua lỗi nếu không tìm thấy file nhạc */ }
+        }
+
+        private void StopGameMusic()
+        {
+            musicPlayer.controls.stop();
         }
     }
 }
