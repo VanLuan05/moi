@@ -1544,8 +1544,8 @@ namespace CaroServer
                 using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
-                    // Lấy Top 5 người điểm cao nhất
-                    string query = "SELECT TOP 5 TenHienThi, Diem FROM NguoiChoi ORDER BY Diem DESC";
+                    // Lấy Top 10 người điểm cao nhất, ưu tiên người thắng nhiều hơn nếu điểm bằng nhau
+                    string query = "SELECT TOP 15 TenHienThi, Diem, SoTranThang, SoTranThua, SoTranHoa FROM NguoiChoi ORDER BY Diem DESC, SoTranThang DESC";
                     SqlCommand cmd = new SqlCommand(query, conn);
                     SqlDataReader r = cmd.ExecuteReader();
 
@@ -1553,16 +1553,35 @@ namespace CaroServer
                     int rank = 1;
                     while (r.Read())
                     {
-                        // Format: MatchID | Time | Opponent | Result
-                        sb.Append($"{r["MatchID"]}|{time:dd/MM HH:mm}|{opponent}|{result}$"); // Dùng $ để ngăn cách các trận
+                        string displayName = r["TenHienThi"].ToString();
+                        int diem = (int)r["Diem"];
+                        int thang = (int)r["SoTranThang"];
+                        int thua = (int)r["SoTranThua"];
+                        int hoa = (int)r["SoTranHoa"];
+
+                        // Format: Rank | DisplayName | Diem | Thang | Thua | Hoa $
+                        sb.Append($"{rank}|{displayName}|{diem}|{thang}|{thua}|{hoa}$");
                         rank++;
                     }
-                    if (sb.Length == 0) sb.Append("Chưa có dữ liệu xếp hạng.");
 
-                    writer.WriteLine($"LEADERBOARD_DATA|{sb.ToString()}");
+                    // Xóa ký tự '$' cuối cùng
+                    string data = sb.ToString().TrimEnd('$');
+
+                    if (data.Length == 0)
+                    {
+                        writer.WriteLine("LEADERBOARD_DATA|Chưa có dữ liệu xếp hạng.");
+                    }
+                    else
+                    {
+                        writer.WriteLine($"LEADERBOARD_DATA|{data}");
+                    }
                 }
             }
-            catch { writer.WriteLine("MESSAGE|Lỗi lấy BXH!"); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Lỗi lấy BXH: {ex.Message}");
+                writer.WriteLine("MESSAGE|Lỗi lấy BXH!");
+            }
         }
         static void SendReplayData(TcpClient client, int matchId, StreamWriter writer)
         {

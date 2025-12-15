@@ -479,15 +479,74 @@ namespace CaroClient
                     btnOpenAdmin.Location = new Point(pnlMain.Width - 140, 120);
                 }
             };
-
+            pnlLobby.SizeChanged += pnlLobby_Resize;
             // Kích hoạt sự kiện resize một lần ngay khi chạy để sắp xếp
             pnlLobby_Resize(null, null);
         }
 
-        // Hàm phụ để gọi resize thủ công
+        
+        // Hàm phụ để xử lý Responsive (Co giãn giao diện)
         private void pnlLobby_Resize(object sender, EventArgs e)
         {
-            // Gọi lại logic trong SizeChanged
+            // Kiểm tra an toàn
+            if (pnlLobby == null || pnlLobby.Controls.Count == 0) return;
+
+            // 1. Tìm pnlMain (Là Panel chiếm toàn bộ không gian - Dock.Fill)
+            Panel pnlMain = null;
+            foreach (Control c in pnlLobby.Controls)
+            {
+                if (c is Panel && c.Dock == DockStyle.Fill)
+                {
+                    pnlMain = (Panel)c;
+                    break;
+                }
+            }
+
+            if (pnlMain == null) return; // Không tìm thấy thì thoát
+
+            // 2. Tìm tblMenu (Là TableLayoutPanel chứa các nút chức năng)
+            TableLayoutPanel tblMenu = null;
+            foreach (Control c in pnlMain.Controls)
+            {
+                if (c is TableLayoutPanel)
+                {
+                    tblMenu = (TableLayoutPanel)c;
+                    break;
+                }
+            }
+
+            // 3. Thực hiện tính toán và căn giữa Menu
+            if (tblMenu != null)
+            {
+                // Tính chiều rộng mục tiêu (giới hạn max 450px)
+                int targetWidth = Math.Min(450, pnlMain.Width - 40);
+
+                // Cập nhật kích thước
+                tblMenu.Size = new Size(targetWidth, 600);
+
+                // Căn giữa tblMenu trong pnlMain
+                tblMenu.Location = new Point(
+                    (pnlMain.Width - tblMenu.Width) / 2,
+                    Math.Max(0, (pnlMain.Height - tblMenu.Height) / 2)
+                );
+            }
+
+            // 4. Neo các nút góc phải (Cài đặt, Đăng xuất, Admin)
+            // Vì các nút này có thể là biến cục bộ, ta tìm theo Text hoặc tên biến toàn cục
+            foreach (Control c in pnlMain.Controls)
+            {
+                if (c is Button b)
+                {
+                    if (b.Text.Contains("Cài đặt"))
+                        b.Location = new Point(pnlMain.Width - 140, 20);
+
+                    else if (b.Text.Contains("Đăng xuất"))
+                        b.Location = new Point(pnlMain.Width - 140, 70);
+
+                    else if (b.Text.Contains("ADMIN"))
+                        b.Location = new Point(pnlMain.Width - 140, 120);
+                }
+            }
         }
 
         // Hàm gửi tin nhắn Lobby
@@ -1071,7 +1130,16 @@ namespace CaroClient
                             ShowScreen(pnlLogin);
                         }));
                     }
-                    // ... (Các lệnh Reset mật khẩu cũ giữ nguyên) ...
+                    else if (cmd == "RESET_SUCCESS")
+                    {
+                        string content = parts[1];
+                        this.Invoke(new Action(() => MessageBox.Show(content, "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+                    }
+                    else if (cmd == "RESET_FAIL")
+                    {
+                        string content = parts[1];
+                        this.Invoke(new Action(() => MessageBox.Show(content, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error)));
+                    }
 
                     // --- XỬ LÝ TRONG GAME ---
                     else if (cmd == "MOVE")
@@ -1138,13 +1206,45 @@ namespace CaroClient
                     }
                     else if (cmd == "NEW_GAME")
                     {
+                        // Reset tọa độ thắng
                         winStart = new Point(-1, -1);
                         winEnd = new Point(-1, -1);
-                        currBoard = new int[20, 20];
+
                         this.Invoke(new Action(() => {
-                            pnlChessBoard.Invalidate();
-                            lblLuotDi.Text = "Ván mới bắt đầu...";
-                            ResetTimer();
+                            // --- [SỬA LỖI TẠI ĐÂY] ---
+                            // Phải xóa dữ liệu trong mảng banCoAo (Mảng dùng để vẽ)
+                            if (banCoAo != null)
+                            {
+                                // Nếu kích thước không đổi, chỉ cần xóa dữ liệu về 0
+                                if (banCoAo.GetLength(0) == boardSize)
+                                {
+                                    Array.Clear(banCoAo, 0, banCoAo.Length);
+                                }
+                                else
+                                {
+                                    // Nếu kích thước thay đổi (ít gặp nhưng cứ đề phòng), tạo mới
+                                    banCoAo = new int[boardSize, boardSize];
+                                }
+                            }
+                            else
+                            {
+                                banCoAo = new int[boardSize, boardSize];
+                            }
+                            // -------------------------
+
+                            // Cập nhật giao diện
+                            pnlChessBoard.Invalidate(); // Vẽ lại bàn cờ trắng
+                            ResetTimer(); // Reset đồng hồ về 03:00
+
+                            // Hiển thị thông báo tùy theo chế độ
+                            if (CheDoChoi == "SPECTATOR")
+                            {
+                                lblLuotDi.Text = "Hai người chơi đang bắt đầu ván mới...";
+                            }
+                            else
+                            {
+                                lblLuotDi.Text = "Ván mới bắt đầu...";
+                            }
                         }));
                     }
                     // --- XỬ LÝ HÒA (BỔ SUNG) ---
@@ -1260,24 +1360,270 @@ namespace CaroClient
                     }
                     else if (cmd == "RECONNECT_GAME")
                     {
-                        // (Giữ nguyên logic Reconnect của bạn - code bạn viết đã tốt rồi)
-                        // ... Code Reconnect cũ ...
-                        // Lưu ý: Chỉ cần copy paste đoạn RECONNECT_GAME từ code cũ vào đây
-                        // Vì nó quá dài nên mình không paste lại để tránh rối, nhưng logic của bạn đúng rồi.
+                        try
+                        {
+                            // 1. Lấy dữ liệu từ gói tin
+                            mySide = int.Parse(parts[1]);
+                            boardSize = int.Parse(parts[2]);
+                            string opName = parts[3];
+                            int opAvatar = int.Parse(parts[4]);
+                            string historyData = (parts.Length > 5) ? parts[5] : "";
+
+                            this.Invoke(new Action(() => {
+                                // --- [QUAN TRỌNG] Đặt lại chế độ chơi là Online ---
+                                CheDoChoi = "LAN";
+                                ShowScreen(pnlGame);
+
+                                lblWelcome.Text = $"Xin chào, {currentUsername}!";
+
+                                // 2. Setup thông tin đối thủ và Avatar
+                                if (mySide == 1) // Mình là X (Host)
+                                {
+                                    ptbAvatar1.Image = GetAvatarByID(0); // Ảnh mình
+                                    ptbAvatar2.Image = GetAvatarByID(opAvatar); // Ảnh đối thủ
+                                }
+                                else // Mình là O (Guest)
+                                {
+                                    ptbAvatar1.Image = GetAvatarByID(opAvatar); // Ảnh đối thủ
+                                    ptbAvatar2.Image = GetAvatarByID(0); // Ảnh mình
+                                }
+                                ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
+                                ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
+
+                                // 3. VẼ LẠI BÀN CỜ
+                                if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                    banCoAo = new int[boardSize, boardSize];
+                                else
+                                    Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                                pnlChessBoard.Refresh();
+                                Application.DoEvents(); // Đợi 1 chút cho UI xóa xong hẳn rồi mới vẽ đè lên
+
+                                // Biến đếm lượt để xác định lượt tiếp theo: 1 là X, 2 là O
+                                int turnCounter = 1;
+
+                                if (!string.IsNullOrEmpty(historyData))
+                                {
+                                    string[] moves = historyData.Split(';');
+
+                                    Graphics g = pnlChessBoard.CreateGraphics();
+                                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                                    GetBoardMetrics(out float cs, out float ox, out float oy);
+
+                                    if (cs > 0 && !float.IsNaN(cs))
+                                    {
+                                        g.TranslateTransform(ox, oy);
+
+                                        foreach (string move in moves)
+                                        {
+                                            if (string.IsNullOrWhiteSpace(move)) continue;
+                                            string[] coord = move.Split('|');
+                                            if (coord.Length < 2) continue;
+
+                                            int x = int.Parse(coord[0]);
+                                            int y = int.Parse(coord[1]);
+
+                                            if (x >= 0 && x < boardSize && y >= 0 && y < boardSize)
+                                            {
+                                                // Cập nhật mảng logic
+                                                banCoAo[x, y] = turnCounter;
+
+                                                // Vẽ lại quân cờ
+                                                if (turnCounter == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                                else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                            }
+
+                                            // Đổi lượt cho nước tiếp theo
+                                            turnCounter = (turnCounter == 1) ? 2 : 1;
+                                        }
+                                    }
+                                }
+
+                                // --- [XÁC ĐỊNH LƯỢT ĐI TIẾP THEO] ---
+                                // So sánh lượt hiện tại (turnCounter) với phe của mình (mySide)
+                                if (turnCounter == mySide)
+                                {
+                                    // Nếu trùng nhau => Đến lượt mình đánh
+                                    lblLuotDi.Text = $"Đến lượt BẠN ({(mySide == 1 ? "X" : "O")})";
+                                    PlaySound(Properties.Resources.ding); // Kêu ding để báo hiệu
+                                }
+                                else
+                                {
+                                    // Nếu khác nhau => Đến lượt đối thủ
+                                    lblLuotDi.Text = $"Đến lượt {opName} ({(mySide == 1 ? "O" : "X")})";
+                                }
+                                // ----------------------------------------------
+
+                                ResetTimer();
+                                UpdateButtonStates(); // Cập nhật trạng thái nút Undo/Xin hòa
+                                MessageBox.Show("Đã kết nối lại trận đấu! Mời bạn tiếp tục.", "Thông báo");
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            this.Invoke(new Action(() => MessageBox.Show($"Lỗi Reconnect: {ex.Message}")));
+                        }
                     }
                     else if (cmd == "WATCH_SUCCESS")
                     {
-                        // (Giữ nguyên logic Watch của bạn - code bạn viết đã tốt rồi)
+                        try
+                        {
+                            // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | HistoryString
+                            int serverBoardSize = int.Parse(parts[1]);
+
+                            // Cập nhật lại kích thước bàn cờ nếu cần
+                            boardSize = (serverBoardSize > 0) ? serverBoardSize : 15;
+
+                            string p1 = parts[2];
+                            string p2 = parts[3];
+
+                            // --- [FIX LỖI TẠI ĐÂY] ---
+                            // Vì HistoryString chứa ký tự '|' nên bị hàm Split cắt vụn ra.
+                            // Ta cần nối chúng lại từ phần tử thứ 4 trở đi.
+                            string history = "";
+                            if (parts.Length > 4)
+                            {
+                                // Nối lại tất cả các phần còn lại bằng dấu '|'
+                                history = string.Join("|", parts, 4, parts.Length - 4);
+                            }
+                            // -------------------------
+
+                            this.Invoke(new Action(() => {
+                                CheDoChoi = "SPECTATOR";
+                                ShowScreen(pnlGame);
+
+                                lblWelcome.Text = "CHẾ ĐỘ KHÁN GIẢ";
+                                lblLuotDi.Text = $"Đang xem: {p1} (X) vs {p2} (O)";
+
+                                // Ẩn nút chức năng của người chơi
+                                btnNewGame.Visible = false;
+                                btnUndo.Visible = false;
+                                btnXinHoa.Visible = false;
+                                btnXinThua.Visible = false;
+                                // Hiện nút rời phòng
+                                btnLeaveGame.Visible = true;
+
+                                // Khởi tạo bàn cờ ảo
+                                if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                    banCoAo = new int[boardSize, boardSize];
+                                else
+                                    Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                                // Vẽ lại ngay lập tức
+                                pnlChessBoard.Invalidate();
+                                pnlChessBoard.Update();
+
+                                // Diễn lại lịch sử nước đi
+                                if (!string.IsNullOrEmpty(history))
+                                {
+                                    string[] moves = history.Split(';');
+                                    int turn = 1; // 1=X, 2=O
+
+                                    Graphics g = pnlChessBoard.CreateGraphics();
+                                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                                    GetBoardMetrics(out float cs, out float ox, out float oy);
+
+                                    if (cs > 0 && !float.IsNaN(cs))
+                                    {
+                                        g.TranslateTransform(ox, oy);
+                                        foreach (string move in moves)
+                                        {
+                                            if (string.IsNullOrWhiteSpace(move)) continue;
+                                            string[] coord = move.Split('|');
+                                            if (coord.Length < 2) continue;
+
+                                            if (int.TryParse(coord[0], out int x) && int.TryParse(coord[1], out int y))
+                                            {
+                                                if (x >= 0 && x < boardSize && y >= 0 && y < boardSize)
+                                                {
+                                                    banCoAo[x, y] = turn;
+                                                    if (turn == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                                    else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                                }
+                                                turn = (turn == 1) ? 2 : 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            this.Invoke(new Action(() => MessageBox.Show("Lỗi hiển thị phòng xem: " + ex.Message)));
+                        }
                     }
                     else if (cmd == "REPLAY_DATA")
                     {
-                        // (Giữ nguyên logic Replay của bạn - code bạn viết đã tốt rồi)
+                        string data = parts[1];
+                        this.Invoke(new Action(async () => { // Dùng async để có thể delay
+                            CheDoChoi = "REPLAY";
+                            ShowScreen(pnlGame);
+                            lblWelcome.Text = "ĐANG XEM LẠI...";
+
+                            // Ẩn các nút chức năng khi replay
+                            btnNewGame.Visible = false;
+                            btnUndo.Visible = false;
+                            btnXinHoa.Visible = false;
+                            btnXinThua.Visible = false;
+                            btnLeaveGame.Visible = true;
+
+                            // Reset bàn cờ
+                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                banCoAo = new int[boardSize, boardSize];
+                            else
+                                Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                            pnlChessBoard.Refresh();
+
+                            string[] moves = data.Split(';');
+                            Graphics g = pnlChessBoard.CreateGraphics();
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            GetBoardMetrics(out float cs, out float ox, out float oy);
+
+                            if (cs > 0 && !float.IsNaN(cs))
+                            {
+                                g.TranslateTransform(ox, oy);
+
+                                foreach (string move in moves)
+                                {
+                                    if (string.IsNullOrWhiteSpace(move)) continue;
+                                    string[] info = move.Split(','); // Format: x,y,side
+
+                                    if (info.Length < 3) continue;
+
+                                    int x = int.Parse(info[0]);
+                                    int y = int.Parse(info[1]);
+                                    int side = int.Parse(info[2]);
+
+                                    if (x >= 0 && x < boardSize && y >= 0 && y < boardSize)
+                                    {
+                                        // Cập nhật và vẽ
+                                        banCoAo[x, y] = side;
+                                        if (side == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                        else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                        PlaySound(Properties.Resources.Click);
+                                    }
+
+                                    // Nghỉ 500ms để tạo hiệu ứng như đang đánh thật
+                                    await Task.Delay(500);
+                                }
+                            }
+                            MessageBox.Show("Đã kết thúc Replay!");
+                        }));
                     }
                     else if (cmd == "HISTORY_DATA")
                     {
                         string data = string.Join("|", parts, 1, parts.Length - 1);
                         this.Invoke(new Action(() => ShowHistoryDialog(data)));
                     }
+                    
+                    else if (cmd == "LEADERBOARD_DATA")
+                    {
+                        // Lấy toàn bộ chuỗi dữ liệu (từ phần tử thứ 1 trở đi)
+                        string data = string.Join("|", parts, 1, parts.Length - 1);
+                        this.Invoke(new Action(() => ShowLeaderboardDialog(data)));
+                    }
+                    // ...
                     else if (cmd == "MESSAGE")
                     {
                         string m = string.Join("|", parts, 1, parts.Length - 1);
@@ -1333,7 +1679,7 @@ namespace CaroClient
         private void DrawChess(Graphics g, Image i, string t, Brush b, int x, int y, float s) { float sc = boardSize == 10 ? 0.8f : 0.75f; float sz = s * sc; float off = (s - sz) / 2; if (i != null) g.DrawImage(i, x * s + off, y * s + off, sz, sz); else g.DrawString(t, new Font("Arial", s * 0.5f, FontStyle.Bold), b, x * s + s * 0.2f, y * s + s * 0.1f); }
         private void SendChatMessage() { if (!string.IsNullOrWhiteSpace(txtMessage.Text)) { SendCommand($"CHAT|{txtMessage.Text}"); txtMessage.Clear(); } }
         private void ResetTimer() { thoiGianConLai = tongThoiGian; lblDongHo.Text = "03:00"; prcbCoolDown.Value = tongThoiGian; tmCoolDown.Start(); }
-        // Hàm này không cần tham số nữa vì ta chỉ dùng 1 âm thanh click
+        
         // Thêm tham số 'sound' kiểu Stream để nhận file từ Resources
         private void PlaySound(System.IO.Stream sound)
         {
@@ -1498,6 +1844,76 @@ namespace CaroClient
         private void StopGameMusic()
         {
             musicPlayer.controls.stop();
+        }
+        private void ShowLeaderboardDialog(string dataString)
+        {
+            // 1. Setup Form
+            Form lbForm = new Form()
+            {
+                Text = "🏆 BẢNG XẾP HẠNG (Top 10)",
+                Size = new Size(600, 500),
+                StartPosition = FormStartPosition.CenterParent,
+                // Dùng màu nền tối cho đồng bộ
+                BackColor = Color.FromArgb(30, 30, 40)
+            };
+
+            // 2. Setup ListView (Bảng hiển thị)
+            ListView lv = new ListView
+            {
+                Dock = DockStyle.Fill,
+                View = View.Details, // Bắt buộc phải là Details để hiện cột
+                GridLines = true,
+                FullRowSelect = true,
+                Font = new Font("Segoe UI", 11, FontStyle.Regular),
+                BackColor = Color.FromArgb(50, 50, 60),
+                ForeColor = Color.White
+            };
+
+            // 3. Add Columns
+            lv.Columns.Add("Hạng", 50, HorizontalAlignment.Center);
+            lv.Columns.Add("Tên Hiển Thị", 180);
+            lv.Columns.Add("Điểm Elo", 80, HorizontalAlignment.Center);
+            lv.Columns.Add("Thắng", 70, HorizontalAlignment.Center);
+            lv.Columns.Add("Thua", 70, HorizontalAlignment.Center);
+            lv.Columns.Add("Hòa", 70, HorizontalAlignment.Center);
+
+            // 4. Populate Data
+            if (dataString != "Chưa có dữ liệu xếp hạng.")
+            {
+                string[] players = dataString.Split('$');
+                foreach (var player in players)
+                {
+                    if (string.IsNullOrWhiteSpace(player)) continue;
+                    // Format: Rank | DisplayName | Diem | Thang | Thua | Hoa
+                    string[] info = player.Split('|');
+                    if (info.Length == 6)
+                    {
+                        ListViewItem item = new ListViewItem(info[0]); // Rank
+                        item.SubItems.Add(info[1]); // DisplayName
+                        item.SubItems.Add(info[2]); // Diem
+                        item.SubItems.Add(info[3]); // Thang
+                        item.SubItems.Add(info[4]); // Thua
+                        item.SubItems.Add(info[5]); // Hoa
+
+                        // Highlight Top 3 cho đẹp
+                        if (int.TryParse(info[0], out int rank) && rank <= 3)
+                        {
+                            item.BackColor = Color.Gold;
+                            item.ForeColor = Color.Black;
+                        }
+
+                        lv.Items.Add(item);
+                    }
+                }
+                lbForm.Controls.Add(lv);
+            }
+            else
+            {
+                Label lblNoData = new Label { Text = dataString, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.Red, Font = new Font("Segoe UI", 14, FontStyle.Bold) };
+                lbForm.Controls.Add(lblNoData);
+            }
+
+            lbForm.ShowDialog();
         }
     }
 }
