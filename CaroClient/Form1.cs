@@ -287,11 +287,21 @@ namespace CaroClient
             btnCreatePrivate.Click += (s, e) => { selectedGameMode = 2; ShowScreen(pnlBoardSize); };
             pnlLobby.Controls.Add(btnCreatePrivate);
 
-            pnlJoinGroup = new Panel { Size = new Size(300, 70), BackColor = Color.Transparent };
+            pnlJoinGroup = new Panel { Size = new Size(300, 120), BackColor = Color.Transparent };
             lblJoinInstruction = new Label { Text = "Nhập ID phòng:", Location = new Point(0, 0), ForeColor = Color.White, AutoSize = true };
             txtRoomIDJoin = CreateInput("", 0, 25, 180);
             btnJoinPrivate = CreateButton("VÀO NGAY", 190, 23, 110, Color.SteelBlue);
+            Button btnWatch = CreateButton("XEM (👁️)", 190, 60, 110, Color.DarkSlateBlue);
+            btnWatch.Height = 29;
+            btnWatch.Click += (s, e) => {
+                if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text))
+                    SendCommand($"WATCH_ROOM|{txtRoomIDJoin.Text}");
+            };
+            pnlJoinGroup.Controls.Add(btnWatch);
             btnJoinPrivate.Height = 29;
+           
+           
+            // Nhớ tăng chiều cao pnlJoinGroup lên nếu bị che: pnlJoinGroup.Size = new Size(300, 100);
             btnJoinPrivate.Click += (s, e) => { if (!string.IsNullOrWhiteSpace(txtRoomIDJoin.Text)) { selectedGameMode = 3; tempRoomID = txtRoomIDJoin.Text; ShowScreen(pnlBoardSize); } };
             pnlJoinGroup.Controls.Add(lblJoinInstruction); pnlJoinGroup.Controls.Add(txtRoomIDJoin); pnlJoinGroup.Controls.Add(btnJoinPrivate);
             pnlLobby.Controls.Add(pnlJoinGroup);
@@ -535,7 +545,7 @@ namespace CaroClient
 
         private void PnlChessBoard_Paint(object sender, PaintEventArgs e)
         {
-            // 1. Vẽ nền và kẻ lưới (Code cũ)
+            // 1. Vẽ nền và kẻ lưới (Giữ nguyên code cũ)
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.WhiteSmoke);
@@ -551,16 +561,17 @@ namespace CaroClient
                 }
             }
 
-            // 2. [MỚI] VẼ LẠI CÁC QUÂN CỜ ĐÃ ĐÁNH (Để không bị mất hình)
-            if (CheDoChoi == "VS_MAY" && banCoAo != null)
+            // 2. [SỬA LẠI] VẼ LẠI CÁC QUÂN CỜ (Áp dụng cho cả Online và Offline)
+            // Chỉ cần kiểm tra banCoAo khác null là vẽ
+            if (banCoAo != null)
             {
                 for (int i = 0; i < boardSize; i++)
                 {
                     for (int j = 0; j < boardSize; j++)
                     {
-                        if (banCoAo[i, j] == 1) // Quân Người (X)
+                        if (banCoAo[i, j] == 1) // Quân X
                             DrawChess(g, imgX, "X", Brushes.Red, i, j, cs);
-                        else if (banCoAo[i, j] == 2) // Quân Máy (O)
+                        else if (banCoAo[i, j] == 2) // Quân O
                             DrawChess(g, imgO, "O", Brushes.Blue, i, j, cs);
                     }
                 }
@@ -574,7 +585,7 @@ namespace CaroClient
             if (cx < 0 || cy < 0) return;
             int x = (int)(cx / cs); int y = (int)(cy / cs);
             if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) return;
-
+            if (CheDoChoi == "SPECTATOR") return; // Khán giả không được đánh
             if (CheDoChoi == "VS_MAY")
             {
                 if (isAiThinking || banCoAo[x, y] != 0) return;
@@ -616,6 +627,7 @@ namespace CaroClient
                     }));
                 });
             }
+
             else
             {
                 if (!IsConnected()) return;
@@ -659,8 +671,164 @@ namespace CaroClient
                         string content = parts[1]; // Đã đổi tên biến
                         this.Invoke(new Action(() => MessageBox.Show(content, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error)));
                     }
-                    // ... Trong vòng lặp while của ReceiveMessage ...
+                    // ... (Các lệnh cũ)
 
+                    else if (cmd == "HISTORY_DATA")
+                    {
+                        // Nhận dữ liệu lịch sử và hiện bảng chọn
+                        string data = (parts.Length > 1) ? parts[1] : "";
+                        this.Invoke(new Action(() => ShowHistoryDialog(data)));
+                    }
+                    else if (cmd == "REPLAY_DATA")
+                    {
+                        // Nhận dữ liệu các nước đi để chiếu lại (Replay)
+                        string data = parts[1];
+                        this.Invoke(new Action(async () => {
+                            CheDoChoi = "REPLAY"; // Chế độ xem lại
+                            ShowScreen(pnlGame);
+                            lblWelcome.Text = "ĐANG XEM LẠI TRẬN ĐẤU...";
+                            lblLuotDi.Text = "Replay Mode";
+
+                            // Ẩn nút chức năng
+                            btnUndo.Visible = false;
+                            btnNewGame.Visible = false;
+                            btnXinHoa.Visible = false;
+                            btnXinThua.Visible = false;
+
+                            // Reset bàn cờ
+                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                banCoAo = new int[boardSize, boardSize];
+                            else
+                                Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                            pnlChessBoard.Refresh();
+
+                            // Bắt đầu diễn lại từng nước đi
+                            string[] moves = data.Split(';');
+                            Graphics g = pnlChessBoard.CreateGraphics();
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            GetBoardMetrics(out float cs, out float ox, out float oy);
+                            g.TranslateTransform(ox, oy);
+
+                            foreach (string move in moves)
+                            {
+                                if (string.IsNullOrWhiteSpace(move)) continue;
+                                string[] info = move.Split(','); // Format: x,y,side
+                                if (info.Length < 3) continue;
+
+                                int x = int.Parse(info[0]);
+                                int y = int.Parse(info[1]);
+                                int side = int.Parse(info[2]);
+
+                                // Cập nhật và vẽ
+                                banCoAo[x, y] = side;
+                                if (side == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+
+                                PlaySound(Properties.Resources.Click);
+
+                                // Delay 800ms để tạo cảm giác như đang đánh thật
+                                await Task.Delay(800);
+                            }
+                            MessageBox.Show("Đã kết thúc Replay!");
+                            // Hiện lại các nút khi xong (nếu cần) hoặc user tự bấm Rời phòng
+                        }));
+                    }
+                    // ... (Các lệnh khác)
+                    // ... Trong vòng lặp while của ReceiveMessage ...
+                    else if (cmd == "WATCH_SUCCESS")
+                    {
+                        // Format: WATCH_SUCCESS | BoardSize | P1Name | P2Name | History
+                        boardSize = int.Parse(parts[1]);
+                        string p1 = parts[2];
+                        string p2 = parts[3];
+                        string history = (parts.Length > 4) ? parts[4] : "";
+
+                        this.Invoke(new Action(() => {
+                            CheDoChoi = "SPECTATOR"; // Chế độ khán giả
+                            ShowScreen(pnlGame);
+
+                            lblLuotDi.Text = $"Đang xem: {p1} vs {p2}";
+                            lblWelcome.Text = "CHẾ ĐỘ KHÁN GIẢ";
+
+                            // Ẩn các nút điều khiển
+                            btnUndo.Visible = false;
+                            btnXinHoa.Visible = false;
+                            btnXinThua.Visible = false;
+                            btnNewGame.Visible = false;
+
+                            // Vẽ lại bàn cờ (Copy logic vẽ từ Reconnect qua)
+                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                banCoAo = new int[boardSize, boardSize];
+                            else
+                                Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                            pnlChessBoard.Refresh();
+                            Application.DoEvents();
+
+                            // Vẽ các nước đã đánh
+                            if (!string.IsNullOrEmpty(history))
+                            {
+                                string[] moves = history.Split(';');
+                                int turn = 1;
+                                Graphics g = pnlChessBoard.CreateGraphics();
+                                g.SmoothingMode = SmoothingMode.AntiAlias;
+                                GetBoardMetrics(out float cs, out float ox, out float oy);
+                                g.TranslateTransform(ox, oy);
+
+                                foreach (string move in moves)
+                                {
+                                    if (string.IsNullOrWhiteSpace(move)) continue;
+                                    string[] coord = move.Split('|');
+                                    int x = int.Parse(coord[0]);
+                                    int y = int.Parse(coord[1]);
+                                    banCoAo[x, y] = turn;
+                                    if (turn == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                    else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                    turn = (turn == 1) ? 2 : 1;
+                                }
+                            }
+                        }));
+                    }
+                    else if (cmd == "REPLAY_DATA")
+                    {
+                        string data = parts[1];
+                        this.Invoke(new Action(async () => { // Dùng async để có thể delay
+                            CheDoChoi = "REPLAY";
+                            ShowScreen(pnlGame);
+                            lblWelcome.Text = "ĐANG XEM LẠI...";
+
+                            // Reset bàn cờ
+                            if (banCoAo == null) banCoAo = new int[boardSize, boardSize];
+                            Array.Clear(banCoAo, 0, banCoAo.Length);
+                            pnlChessBoard.Refresh();
+
+                            string[] moves = data.Split(';');
+                            Graphics g = pnlChessBoard.CreateGraphics();
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            GetBoardMetrics(out float cs, out float ox, out float oy);
+                            g.TranslateTransform(ox, oy);
+
+                            foreach (string move in moves)
+                            {
+                                if (string.IsNullOrWhiteSpace(move)) continue;
+                                string[] info = move.Split(','); // x,y,side
+                                int x = int.Parse(info[0]);
+                                int y = int.Parse(info[1]);
+                                int side = int.Parse(info[2]);
+
+                                // Cập nhật và vẽ
+                                banCoAo[x, y] = side;
+                                if (side == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                PlaySound(Properties.Resources.Click);
+
+                                // Nghỉ 500ms để tạo hiệu ứng đánh cờ
+                                await Task.Delay(500);
+                            }
+                            MessageBox.Show("Đã kết thúc Replay!");
+                        }));
+                    }
                     else if (cmd == "UNDO_ASK")
                     {
                         // Đây là Client B nhận được câu hỏi
@@ -733,6 +901,8 @@ namespace CaroClient
                         this.Invoke(new Action(() => {
                             ShowScreen(pnlGame);
                             ResetTimer();
+                            // Khởi tạo mảng lưu bàn cờ cho chế độ Online
+                            banCoAo = new int[boardSize, boardSize];
                             pnlChessBoard.Invalidate();
                             UpdateButtonStates();
 
@@ -757,82 +927,101 @@ namespace CaroClient
                     }
                     else if (cmd == "RECONNECT_GAME")
                     {
-                        // Format: RECONNECT_GAME | Side | BoardSize | OpponentName | OpponentAvatar | HistoryString
-                        mySide = int.Parse(parts[1]);
-                        boardSize = int.Parse(parts[2]);
-                        string opName = parts[3];
-                        int opAvatar = int.Parse(parts[4]);
-                        string historyData = (parts.Length > 5) ? parts[5] : "";
+                        try
+                        {
+                            // 1. Lấy dữ liệu từ gói tin
+                            mySide = int.Parse(parts[1]);
+                            boardSize = int.Parse(parts[2]);
+                            string opName = parts[3];
+                            int opAvatar = int.Parse(parts[4]);
+                            string historyData = (parts.Length > 5) ? parts[5] : "";
 
-                        this.Invoke(new Action(() => {
-                            // 1. Chuyển màn hình
-                            ShowScreen(pnlGame);
-                            lblWelcome.Text = $"Xin chào, {currentUsername}!";
+                            this.Invoke(new Action(() => {
+                                // --- [QUAN TRỌNG] Đặt lại chế độ chơi là Online ---
+                                CheDoChoi = "LAN";
+                                ShowScreen(pnlGame);
 
-                            // 2. Setup thông tin đối thủ
-                            if (mySide == 1)
-                            {
-                                lblLuotDi.Text = $"Bạn (X) vs {opName} (O)";
-                                ptbAvatar1.Image = GetAvatarByID(0); // Mình (Tạm)
-                                ptbAvatar2.Image = GetAvatarByID(opAvatar);
-                            }
-                            else
-                            {
-                                lblLuotDi.Text = $"Bạn (O) vs {opName} (X)";
-                                ptbAvatar1.Image = GetAvatarByID(opAvatar);
-                                ptbAvatar2.Image = GetAvatarByID(0); // Mình (Tạm)
-                            }
-                            ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
-                            ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
+                                lblWelcome.Text = $"Xin chào, {currentUsername}!";
 
-                            // 3. VẼ LẠI BÀN CỜ TỪ LỊCH SỬ
-                            // Reset bàn cờ ảo
-                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
-                                banCoAo = new int[boardSize, boardSize];
-                            else
-                                Array.Clear(banCoAo, 0, banCoAo.Length);
-
-                            // Xóa sạch hình vẽ cũ
-                            pnlChessBoard.Refresh();
-
-                            // Vẽ lại từng nước đi
-                            if (!string.IsNullOrEmpty(historyData))
-                            {
-                                string[] moves = historyData.Split(';');
-                                int turnCounter = 1; // 1: X đi, 2: O đi (Bắt đầu luôn là X)
-
-                                Graphics g = pnlChessBoard.CreateGraphics();
-                                g.SmoothingMode = SmoothingMode.AntiAlias;
-                                GetBoardMetrics(out float cs, out float ox, out float oy);
-                                g.TranslateTransform(ox, oy);
-
-                                foreach (string move in moves)
+                                // 2. Setup thông tin đối thủ và Avatar
+                                if (mySide == 1) // Mình là X (Host)
                                 {
-                                    if (string.IsNullOrWhiteSpace(move)) continue;
-                                    string[] coord = move.Split('|'); // Format history server là x|y
-                                    if (coord.Length < 2) continue;
+                                    ptbAvatar1.Image = GetAvatarByID(0); // Ảnh mình
+                                    ptbAvatar2.Image = GetAvatarByID(opAvatar); // Ảnh đối thủ
+                                }
+                                else // Mình là O (Guest)
+                                {
+                                    ptbAvatar1.Image = GetAvatarByID(opAvatar); // Ảnh đối thủ
+                                    ptbAvatar2.Image = GetAvatarByID(0); // Ảnh mình
+                                }
+                                ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
+                                ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
 
-                                    int x = int.Parse(coord[0]);
-                                    int y = int.Parse(coord[1]);
+                                // 3. VẼ LẠI BÀN CỜ
+                                if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                    banCoAo = new int[boardSize, boardSize];
+                                else
+                                    Array.Clear(banCoAo, 0, banCoAo.Length);
 
-                                    // Cập nhật dữ liệu
-                                    banCoAo[x, y] = turnCounter;
+                                pnlChessBoard.Refresh();
+                                Application.DoEvents(); // Đợi 1 chút cho UI xóa xong hẳn rồi mới vẽ đè lên
+                                // Biến đếm lượt: 1 là X, 2 là O
+                                int turnCounter = 1;
 
-                                    // Vẽ
-                                    if (turnCounter == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
-                                    else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                                if (!string.IsNullOrEmpty(historyData))
+                                {
+                                    string[] moves = historyData.Split(';');
 
-                                    // Đổi lượt
-                                    turnCounter = (turnCounter == 1) ? 2 : 1;
+                                    Graphics g = pnlChessBoard.CreateGraphics();
+                                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                                    GetBoardMetrics(out float cs, out float ox, out float oy);
+                                    g.TranslateTransform(ox, oy);
+
+                                    foreach (string move in moves)
+                                    {
+                                        if (string.IsNullOrWhiteSpace(move)) continue;
+                                        string[] coord = move.Split('|');
+                                        if (coord.Length < 2) continue;
+
+                                        int x = int.Parse(coord[0]);
+                                        int y = int.Parse(coord[1]);
+
+                                        // Cập nhật mảng logic
+                                        banCoAo[x, y] = turnCounter;
+
+                                        // Vẽ lại quân cờ
+                                        if (turnCounter == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                        else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+
+                                        // Đổi lượt cho nước tiếp theo
+                                        turnCounter = (turnCounter == 1) ? 2 : 1;
+                                    }
                                 }
 
-                                // Cập nhật lại lượt đi hiện tại trên UI
-                                lblLuotDi.Text = (turnCounter == 1) ? "Đến lượt X" : "Đến lượt O";
-                            }
+                                // --- [ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG NHẤT] ---
+                                // So sánh lượt hiện tại (turnCounter) với phe của mình (mySide)
+                                if (turnCounter == mySide)
+                                {
+                                    // Nếu trùng nhau => Đến lượt mình đánh
+                                    lblLuotDi.Text = $"Đến lượt BẠN ({(mySide == 1 ? "X" : "O")})";
+                                    PlaySound(Properties.Resources.ding); // Kêu ding để báo hiệu
+                                }
+                                else
+                                {
+                                    // Nếu khác nhau => Đến lượt đối thủ
+                                    lblLuotDi.Text = $"Đến lượt {opName} ({(mySide == 1 ? "O" : "X")})";
+                                }
+                                // ----------------------------------------------
 
-                            UpdateButtonStates();
-                            MessageBox.Show("Đã kết nối lại trận đấu!", "Thông báo");
-                        }));
+                                ResetTimer();
+                                UpdateButtonStates(); // Cập nhật trạng thái nút Undo/Xin hòa
+                                MessageBox.Show("Đã kết nối lại trận đấu! Mời bạn tiếp tục.", "Thông báo");
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            this.Invoke(new Action(() => MessageBox.Show($"Lỗi Reconnect: {ex.Message}")));
+                        }
                     }
                     else if (cmd == "MOVE")
                     {
@@ -850,7 +1039,11 @@ namespace CaroClient
                                 // Dùng Thread để kêu đè lên tiếng click (hoặc kêu sau 1 chút)
                                 Task.Delay(200).ContinueWith(t => PlaySound(Properties.Resources.ding));
                             }
-
+                            // Lưu nước đi vào mảng client để Paint có thể vẽ lại khi cần
+                            if (banCoAo != null && x >= 0 && x < boardSize && y >= 0 && y < boardSize)
+                            {
+                                banCoAo[x, y] = s;
+                            }
                             // ... (Giữ nguyên đoạn vẽ bàn cờ phía sau) ...
                             Graphics g = pnlChessBoard.CreateGraphics();
                             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -979,6 +1172,52 @@ namespace CaroClient
                 case 3: return Properties.Resources.avatar3;
                 default: return Properties.Resources.avatar0; // Mặc định
             }
+        }
+        // Hàm hiển thị danh sách lịch sử đấu để chọn xem lại
+        private void ShowHistoryDialog(string dataString)
+        {
+            Form historyForm = new Form()
+            {
+                Text = "Lịch sử đấu (Click đúp để xem lại)",
+                Size = new Size(500, 400),
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            ListBox lstHistory = new ListBox() { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 12) };
+
+            // Tách chuỗi dữ liệu server gửi về (ngăn cách bằng $)
+            string[] matches = dataString.Split('$');
+            foreach (var match in matches)
+            {
+                if (string.IsNullOrWhiteSpace(match)) continue;
+                // Format từ server: MatchID | Thời gian | Đối thủ | Kết quả
+                string[] info = match.Split('|');
+                if (info.Length >= 4)
+                {
+                    // Hiển thị đẹp mắt hơn trên ListBox
+                    // Lưu MatchID vào object item (hoặc parse từ chuỗi khi click)
+                    lstHistory.Items.Add($"[{info[1]}] vs {info[2]} -> {info[3]}  (ID: {info[0]})");
+                }
+            }
+
+            // Xử lý sự kiện chọn trận để xem lại
+            lstHistory.DoubleClick += (s, e) => {
+                if (lstHistory.SelectedItem != null)
+                {
+                    string selectedText = lstHistory.SelectedItem.ToString();
+                    // Lấy ID từ chuỗi hiển thị "... (ID: 123)"
+                    int startIndex = selectedText.LastIndexOf("ID: ") + 4;
+                    int endIndex = selectedText.LastIndexOf(")");
+                    string matchId = selectedText.Substring(startIndex, endIndex - startIndex);
+
+                    // Gửi yêu cầu xem lại
+                    SendCommand($"GET_REPLAY|{matchId}");
+                    historyForm.Close();
+                }
+            };
+
+            historyForm.Controls.Add(lstHistory);
+            historyForm.ShowDialog();
         }
     }
 }
