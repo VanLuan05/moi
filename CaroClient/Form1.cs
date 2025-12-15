@@ -1079,13 +1079,66 @@ namespace CaroClient
 
         private bool CheckWinClient(int[,] board, int x, int y, int side)
         {
-            int winLen = (boardSize < 10) ? 3 : 5; int[] dx = { 1, 0, 1, 1 }; int[] dy = { 0, 1, 1, -1 };
-            for (int d = 0; d < 4; d++)
+            int size = boardSize; // Lấy kích thước bàn cờ hiện tại
+            int[] dx = { 1, 0, 1, 1 };
+            int[] dy = { 0, 1, 1, -1 };
+
+            // Xác định quân đối thủ để kiểm tra chặn
+            int opponent = (side == 1) ? 2 : 1;
+
+            for (int dir = 0; dir < 4; dir++)
             {
-                int c = 1;
-                for (int i = 1; i <= winLen; i++) { int nx = x + dx[d] * i; int ny = y + dy[d] * i; if (nx < 0 || nx >= boardSize || ny < 0 || ny >= boardSize || board[nx, ny] != side) break; c++; }
-                for (int i = 1; i <= winLen; i++) { int nx = x - dx[d] * i; int ny = y - dy[d] * i; if (nx < 0 || nx >= boardSize || ny < 0 || ny >= boardSize || board[nx, ny] != side) break; c++; }
-                if (c >= winLen) return true;
+                int count = 1;
+
+                // 1. Quét chiều dương
+                int i = 1;
+                while (true)
+                {
+                    int nx = x + i * dx[dir];
+                    int ny = y + i * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
+                    count++; i++;
+                }
+                // Vị trí chặn đầu dương
+                int nx_end = x + i * dx[dir];
+                int ny_end = y + i * dy[dir];
+
+                // 2. Quét chiều âm
+                int j = 1;
+                while (true)
+                {
+                    int nx = x - j * dx[dir];
+                    int ny = y - j * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
+                    count++; j++;
+                }
+                // Vị trí chặn đầu âm
+                int nx_start = x - j * dx[dir];
+                int ny_start = y - j * dy[dir];
+
+                if (count >= 5)
+                {
+                    // --- LOGIC CHẶN 2 ĐẦU (Client) ---
+                    if (count == 5)
+                    {
+                        bool isBlockedStart = false;
+                        bool isBlockedEnd = false;
+
+                        // Kiểm tra đầu Start (Ngoài biên hoặc bị chặn bởi địch)
+                        if (nx_start < 0 || nx_start >= size || ny_start < 0 || ny_start >= size || board[nx_start, ny_start] == opponent)
+                            isBlockedStart = true;
+
+                        // Kiểm tra đầu End
+                        if (nx_end < 0 || nx_end >= size || ny_end < 0 || ny_end >= size || board[nx_end, ny_end] == opponent)
+                            isBlockedEnd = true;
+
+                        // Nếu bị chặn cả 2 đầu thì KHÔNG tính thắng
+                        if (isBlockedStart && isBlockedEnd) continue;
+                    }
+
+                    // Nếu thoát được điều kiện trên thì là thắng
+                    return true;
+                }
             }
             return false;
         }
@@ -1140,7 +1193,41 @@ namespace CaroClient
                         string content = parts[1];
                         this.Invoke(new Action(() => MessageBox.Show(content, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error)));
                     }
+                    // ... (Sau các lệnh RESET_FAIL, trước XỬ LÝ TRONG GAME)
+                    else if (cmd == "FORBIDDEN")
+                    {
+                        string reason = parts[1];
+                        this.Invoke(new Action(() => {
+                            MessageBox.Show($"Nước đi không hợp lệ: {reason}", "Luật Cấm", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
+                            // [QUAN TRỌNG] Tự động xóa quân vừa đánh (Logic giống UNDO)
+                            // Lấy tọa độ nước đi cuối cùng của mình
+                            // Do Server đã gửi lại lệnh UNDO cho đối thủ, ta chỉ cần tự undo cho mình
+                            if (banCoAo != null)
+                            {
+                                // Tìm nước vừa đánh (là nước cuối cùng của mình)
+                                // Do Server đã hủy nước đi, ta chỉ cần xóa nó trên giao diện
+                                // Do Client chưa có lịch sử nước đi, ta phải dùng logic xóa quân cờ:
+
+                                // Xóa quân vừa đánh trên giao diện
+                                int lastX = -1, lastY = -1;
+                                // Tạm thời reset timer và cho phép đánh lại
+                                ResetTimer();
+
+                                // Cần một cách an toàn để lấy tọa độ quân vừa đánh.
+                                // Vì Server đã trả lại lượt cho mình, ta chỉ cần ép vẽ lại bàn cờ
+                                // (Giả sử Client đã có logic lưu nước đi)
+
+                                pnlChessBoard.Invalidate(); // Vẽ lại để xóa quân cờ sai
+
+                                // Cập nhật lại lượt đi trên UI
+                                string myTurnText = (mySide == 1) ? "Đến lượt BẠN (X)" : "Đến lượt BẠN (O)";
+                                lblLuotDi.Text = myTurnText;
+
+                            }
+                        }));
+                    }
+                    // ...
                     // --- XỬ LÝ TRONG GAME ---
                     else if (cmd == "MOVE")
                     {

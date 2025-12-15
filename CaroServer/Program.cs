@@ -988,7 +988,21 @@ namespace CaroServer
 
                     // Gửi nước đi cho cả phòng
                     BroadcastToRoom(room, $"MOVE|{x}|{y}|{side}");
+                    // --- [THÊM LOGIC KIỂM TRA LUẬT CẤM TẠI ĐÂY] ---
+                    if (CheckForbidden(room.Board, x, y, side, room.BoardSize))
+                    {
+                        // Nếu là nước cấm, hủy nước đi!
+                        room.Board[x, y] = 0; // Xóa quân vừa đánh
+                        room.History.Pop(); // Xóa khỏi lịch sử
+                        room.Turn = side; // Trả lại lượt cho người vừa đi
 
+                        // Gửi thông báo cấm và yêu cầu Client hủy nước đi
+                        SendToClient(client, "FORBIDDEN|Đây là nước cấm (3-3, 4-4 hoặc Overline)!");
+                        // Đồng thời, báo cho Client khác biết (để xóa quân cờ nếu Client đã vẽ trước khi Server phản hồi)
+                        BroadcastToRoom(room, $"UNDO|{x}|{y}", exclude: client);
+
+                        break; // Thoát khỏi switch case MOVE
+                    }
                     // --- KIỂM TRA THẮNG THUA (KÈM TỌA ĐỘ DÂY THẮNG) ---
                     int sx, sy, ex, ey; // Tọa độ điểm đầu và cuối của dây thắng
                     if (CheckWin(room.Board, x, y, side, room.BoardSize, out sx, out sy, out ex, out ey))
@@ -1133,44 +1147,83 @@ namespace CaroServer
         // =================================================================================
         // KIỂM TRA THẮNG THUA (CARO LOGIC)
         // =================================================================================
+        // Hàm CheckWin đã được sửa để kiểm tra Luật Chặn Hai Đầu (Blocked Two-Ends)
         static bool CheckWin(int[,] board, int x, int y, int side, int size, out int sx, out int sy, out int ex, out int ey)
         {
             sx = -1; sy = -1; ex = -1; ey = -1;
 
-            int[] dx = { 1, 0, 1, 1 };
+            int[] dx = { 1, 0, 1, 1 }; // Ngang, Dọc, Chéo Chính, Chéo Phụ
             int[] dy = { 0, 1, 1, -1 };
+
+            // Tìm quân đối thủ
+            int opponent = (side == 1) ? 2 : 1;
 
             for (int dir = 0; dir < 4; dir++)
             {
                 int count = 1;
+
+                // 1. Quét chiều dương (Tìm điểm End)
                 int i = 1;
-                // Quét chiều dương
                 while (true)
                 {
                     int nx = x + i * dx[dir];
                     int ny = y + i * dy[dir];
-                    // [SỬA LỖI TẠI ĐÂY]: Đổi board[ny, nx] thành board[nx, ny]
                     if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
                     count++; i++;
                 }
                 int endX = x + (i - 1) * dx[dir];
                 int endY = y + (i - 1) * dy[dir];
 
-                // Quét chiều âm
+                // Vị trí ngay ngoài điểm End
+                int nx_end = x + i * dx[dir];
+                int ny_end = y + i * dy[dir];
+
+                // 2. Quét chiều âm (Tìm điểm Start)
                 int j = 1;
                 while (true)
                 {
                     int nx = x - j * dx[dir];
                     int ny = y - j * dy[dir];
-                    // [SỬA LỖI TẠI ĐÂY]: Đổi board[ny, nx] thành board[nx, ny]
                     if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
                     count++; j++;
                 }
                 int startX = x - (j - 1) * dx[dir];
                 int startY = y - (j - 1) * dy[dir];
 
+                // Vị trí ngay ngoài điểm Start
+                int nx_start = x - j * dx[dir];
+                int ny_start = y - j * dy[dir];
+
                 if (count >= 5)
                 {
+                    // --- [LOGIC CHẶN HAI ĐẦU] ---
+                    if (count == 5) // Chỉ áp dụng luật chặn cho chuỗi 5 quân
+                    {
+                        bool isBlockedStart = false;
+                        bool isBlockedEnd = false;
+
+                        // Kiểm tra Đầu Start: Bị chặn nếu nằm ngoài biên HOẶC là quân địch
+                        if (nx_start < 0 || nx_start >= size || ny_start < 0 || ny_start >= size ||
+                            (nx_start >= 0 && nx_start < size && ny_start >= 0 && ny_start < size && board[nx_start, ny_start] == opponent))
+                        {
+                            isBlockedStart = true;
+                        }
+
+                        // Kiểm tra Đầu End: Bị chặn nếu nằm ngoài biên HOẶC là quân địch
+                        if (nx_end < 0 || nx_end >= size || ny_end < 0 || ny_end >= size ||
+                            (nx_end >= 0 && nx_end < size && ny_end >= 0 && ny_end < size && board[nx_end, ny_end] == opponent))
+                        {
+                            isBlockedEnd = true;
+                        }
+
+                        // Nếu bị chặn CẢ 2 ĐẦU -> KHÔNG THẮNG
+                        if (isBlockedStart && isBlockedEnd)
+                        {
+                            continue; // Bỏ qua hướng này và kiểm tra hướng khác
+                        }
+                    }
+
+                    // Nếu thoát khỏi điều kiện chặn 2 đầu (là chuỗi 5 mở hoặc chuỗi 6+) -> THẮNG
                     sx = startX; sy = startY;
                     ex = endX; ey = endY;
                     return true;
@@ -1178,7 +1231,136 @@ namespace CaroServer
             }
             return false;
         }
+        // Hàm kiểm tra các luật cấm (3-3, 4-4, Overline)
+        // Chỉ áp dụng cho quân X (Side 1)
+        // Trả về true nếu đó là nước cấm
+        static bool CheckForbidden(int[,] board, int x, int y, int side, int size)
+        {
+            // Luật cấm chỉ áp dụng cho phe X (quân 1)
+            if (side != 1) return false;
 
+            // 1. Kiểm tra Overline (Chuỗi 6 quân trở lên)
+            if (CheckOverline(board, x, y, side, size))
+            {
+                Console.WriteLine($">> CẤM: Overline tại ({x},{y})");
+                return true;
+            }
+
+            // 2. Kiểm tra Cấm 4-4
+            if (CountOpenFour(board, x, y, side, size) >= 2)
+            {
+                Console.WriteLine($">> CẤM: Double Four tại ({x},{y})");
+                return true;
+            }
+
+            // 3. Kiểm tra Cấm 3-3
+            if (CountOpenThree(board, x, y, side, size) >= 2)
+            {
+                Console.WriteLine($">> CẤM: Double Three tại ({x},{y})");
+                return true;
+            }
+
+            return false;
+        }
+
+        // --- HÀM HỖ TRỢ CHO LUẬT CẤM ---
+
+        // Đếm số chuỗi N quân mở (chưa bị chặn 2 đầu)
+        static int CountChains(int[,] board, int x, int y, int side, int size, int targetCount, int targetOpenEnds)
+        {
+            int forbiddenCount = 0;
+            int[] dx = { 1, 0, 1, 1 };
+            int[] dy = { 0, 1, 1, -1 };
+
+            for (int dir = 0; dir < 4; dir++)
+            {
+                int count = 1;
+                int openEnds = 0; // Số đầu không bị chặn
+
+                // 1. Quét chiều dương
+                int i = 1;
+                while (true)
+                {
+                    int nx = x + i * dx[dir];
+                    int ny = y + i * dy[dir];
+                    // [LƯU Ý: Dùng board[nx, ny] để khớp với logic MOVE]
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size) break; // Chạm biên
+                    if (board[nx, ny] == side) { count++; i++; }
+                    else if (board[nx, ny] == 0) { openEnds++; break; } // Gặp ô trống
+                    else break; // Bị chặn bởi quân đối phương
+                }
+
+                // 2. Quét chiều âm
+                int j = 1;
+                while (true)
+                {
+                    int nx = x - j * dx[dir];
+                    int ny = y - j * dy[dir];
+                    // [LƯU Ý: Dùng board[nx, ny] để khớp với logic MOVE]
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size) break; // Chạm biên
+                    if (board[nx, ny] == side) { count++; j++; }
+                    else if (board[nx, ny] == 0) { openEnds++; break; } // Gặp ô trống
+                    else break; // Bị chặn bởi quân đối phương
+                }
+
+                // Kiểm tra điều kiện cấm
+                if (count == targetCount && openEnds == targetOpenEnds)
+                {
+                    // Kiểm tra thêm: Nếu là chuỗi 3, phải đảm bảo nó có thể mở rộng thành 5
+                    // (Tức là không bị chặn bởi biên hoặc quân địch ngay sát 2 đầu)
+                    // (Logic này được đơn giản hóa bằng cách chỉ check số đầu mở targetOpenEnds)
+                    forbiddenCount++;
+                }
+            }
+            return forbiddenCount;
+        }
+
+        // Kiểm tra Overline (>= 6 quân liên tiếp)
+        static bool CheckOverline(int[,] board, int x, int y, int side, int size)
+        {
+            int[] dx = { 1, 0, 1, 1 };
+            int[] dy = { 0, 1, 1, -1 };
+
+            for (int dir = 0; dir < 4; dir++)
+            {
+                int count = 1;
+                int i = 1;
+                while (true)
+                {
+                    int nx = x + i * dx[dir];
+                    int ny = y + i * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
+                    count++; i++;
+                }
+                int j = 1;
+                while (true)
+                {
+                    int nx = x - j * dx[dir];
+                    int ny = y - j * dy[dir];
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
+                    count++; j++;
+                }
+
+                if (count >= 6) return true; // Dây 6 trở lên là Overline
+            }
+            return false;
+        }
+
+        // Đếm số chuỗi 4 quân mở (4 chưa bị chặn 2 đầu)
+        static int CountOpenFour(int[,] board, int x, int y, int side, int size)
+        {
+            // Chuỗi 4 mở là 4 quân liên tiếp + 2 đầu là ô trống
+            return CountChains(board, x, y, side, size, 4, 2);
+        }
+
+        // Đếm số chuỗi 3 quân mở (3 chưa bị chặn 2 đầu)
+        static int CountOpenThree(int[,] board, int x, int y, int side, int size)
+        {
+            // Chuỗi 3 mở là 3 quân liên tiếp + 2 đầu là ô trống
+            // Lưu ý: Cần logic phức tạp hơn để loại trừ 3 bị chặn 1 đầu
+            // Tuy nhiên, ta dùng logic đơn giản (3 mở 2 đầu)
+            return CountChains(board, x, y, side, size, 3, 2);
+        }
         // =================================================================================
         // HÀM HỖ TRỢ
         // =================================================================================
