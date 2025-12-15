@@ -145,18 +145,18 @@ namespace CaroClient
         // --- SETUP LOGIN (Đã chỉnh sửa vị trí & thêm nút Offline) ---
         private void SetupLoginScreen()
         {
+            // 1. Tiêu đề
             lblLoginTitle = new Label { Text = "CARO ONLINE", Font = new Font("Segoe UI", 30, FontStyle.Bold), ForeColor = Color.Cyan, AutoSize = true };
             pnlLogin.Controls.Add(lblLoginTitle);
 
+            // 2. GroupBox Khách (Guest)
             gbGuest = CreateGroupBox("Chơi Nhanh (Guest)", 400, 250);
             Label lblIP = new Label
             {
                 Text = "IP Máy Chủ:",
-                Location = new Point(20, 35), // Dịch xuống xíu vì tiêu đề GroupBox giờ to hơn
+                Location = new Point(20, 35),
                 AutoSize = true,
                 ForeColor = Color.White,
-
-                // [THÊM DÒNG NÀY] Đặt lại font nhỏ (cỡ 10) cho nội dung bên trong
                 Font = new Font("Segoe UI", 10, FontStyle.Regular)
             };
             txtServerIP = CreateInput("127.0.0.1", 20, 55, 360);
@@ -175,37 +175,77 @@ namespace CaroClient
             gbGuest.Controls.Add(lblIP); gbGuest.Controls.Add(txtServerIP); gbGuest.Controls.Add(txtNickNameGuest); gbGuest.Controls.Add(btnGuestJoin); gbGuest.Controls.Add(btnGuestPlayAI);
             pnlLogin.Controls.Add(gbGuest);
 
+            // 3. GroupBox Đăng nhập (Login)
             gbLogin = CreateGroupBox("Đăng Nhập Tài Khoản", 400, 300);
             txtUserLogin = CreateInput("Tài khoản...", 20, 40, 360);
-            txtPassLogin = CreateInput("Mật khẩu...", 20, 80, 360); txtPassLogin.UseSystemPasswordChar = true;
+            txtPassLogin = CreateInput("Mật khẩu...", 20, 80, 360);
+            txtPassLogin.UseSystemPasswordChar = true;
+
             btnLoginDB = CreateButton("ĐĂNG NHẬP", 20, 120, 360, Color.DodgerBlue);
             btnLoginDB.Click += (s, e) => {
                 if (string.IsNullOrWhiteSpace(txtUserLogin.Text) || string.IsNullOrWhiteSpace(txtPassLogin.Text)) { MessageBox.Show("Nhập đủ thông tin!", "Thông báo"); return; }
                 isGuest = false; ConnectAndLogin("DB");
             };
+
             btnGoToRegister = CreateButton("ĐĂNG KÝ TÀI KHOẢN MỚI", 20, 170, 360, Color.Purple);
-            btnGoToRegister.Click += (s, e) => ShowScreen(pnlRegister);
+            btnGoToRegister.Click += (s, e) => ShowScreen(pnlRegister); // Thêm sự kiện chuyển màn hình đăng ký
+
+            // --- [SỬA LẠI ĐOẠN LINK LABEL TẠI ĐÂY] ---
+
+            // BƯỚC A: Khởi tạo LinkLabel trước!
             lnkForgotPassword = new LinkLabel
             {
                 Text = "Quên mật khẩu?",
-                AutoSize = true, // Tự động co giãn theo độ dài chữ
+                AutoSize = true,
                 LinkColor = Color.LightSkyBlue,
                 VisitedLinkColor = Color.LightSkyBlue
             };
-            lnkForgotPassword.Click += (s, e) => MessageBox.Show("Liên hệ Admin để cấp lại!", "Thông báo");
 
-            // 1. Phải thêm vào GroupBox trước để máy tính tính toán được chiều rộng thật của chữ
+            // BƯỚC B: Gán sự kiện Click (Logic Reset Pass)
+            lnkForgotPassword.Click += (s, e) => {
+                // 1. Kết nối đến Server trước (nếu chưa kết nối)
+                if (!IsConnected())
+                {
+                    try
+                    {
+                        client = new TcpClient();
+                        // Lấy IP từ textbox, nếu trống thì mặc định localhost
+                        client.Connect(string.IsNullOrWhiteSpace(txtServerIP.Text) ? "127.0.0.1" : txtServerIP.Text, 8080);
+                        NetworkStream st = client.GetStream();
+                        writer = new StreamWriter(st) { AutoFlush = true };
+                        reader = new StreamReader(st);
+                        new Thread(ReceiveMessage) { IsBackground = true }.Start();
+                    }
+                    catch
+                    {
+                        MessageBox.Show("Không thể kết nối đến Server!", "Lỗi");
+                        return;
+                    }
+                }
+
+                // 2. Hiện hộp thoại nhập Email
+                string email = ShowInputDialog("Nhập Email đã đăng ký:", "Quên mật khẩu");
+                if (!string.IsNullOrWhiteSpace(email))
+                {
+                    SendCommand($"RESET_PASS|{email}");
+                }
+            };
+
+            // BƯỚC C: Thêm vào GroupBox trước để tính toán kích thước
             gbLogin.Controls.Add(lnkForgotPassword);
 
-            // 2. Sau đó mới tính tọa độ để căn giữa
-            // Công thức: (Chiều rộng khung - Chiều rộng chữ) / 2
+            // BƯỚC D: Căn giữa
             int xCenter = (gbLogin.Width - lnkForgotPassword.Width) / 2;
-
-            // 3. Đặt vị trí (X = giữa, Y = 230 như cũ)
             lnkForgotPassword.Location = new Point(xCenter, 230);
-            lnkForgotPassword.Click += (s, e) => MessageBox.Show("Liên hệ Admin!", "Thông báo");
 
-            gbLogin.Controls.Add(txtUserLogin); gbLogin.Controls.Add(txtPassLogin); gbLogin.Controls.Add(btnLoginDB); gbLogin.Controls.Add(btnGoToRegister); gbLogin.Controls.Add(lnkForgotPassword);
+            // --- [KẾT THÚC SỬA] ---
+
+            gbLogin.Controls.Add(txtUserLogin);
+            gbLogin.Controls.Add(txtPassLogin);
+            gbLogin.Controls.Add(btnLoginDB);
+            gbLogin.Controls.Add(btnGoToRegister);
+            // Lưu ý: lnkForgotPassword đã được Add ở bước C rồi, không Add lại nữa
+
             pnlLogin.Controls.Add(gbLogin);
 
             CenterLoginControls();
@@ -445,7 +485,17 @@ namespace CaroClient
             prcbCoolDown = new ProgressBar { Location = new Point(25, 80), Width = 200, Height = 10, Maximum = tongThoiGian, Value = tongThoiGian };
             lblLuotDi = new Label { Text = "Lượt đấu...", Location = new Point(25, 100), AutoSize = true, ForeColor = Color.Yellow, Font = new Font("Segoe UI", 12) };
             btnNewGame = CreateButton("VÁN MỚI", 25, 150, 200, Color.Teal); btnNewGame.Click += (s, e) => SendCommand("NEW_GAME");
-            btnUndo = CreateButton("XIN ĐI LẠI", 25, 200, 200, Color.Goldenrod); btnUndo.Click += (s, e) => SendCommand("UNDO");
+            btnUndo = CreateButton("XIN ĐI LẠI", 25, 200, 200, Color.Goldenrod); btnUndo.Click += (s, e) => {
+                // Chỉ cho xin đi lại khi đang chơi Online (Lan/Internet)
+                if (CheDoChoi == "VS_MAY")
+                {
+                    // Nếu đấu với máy thì cho Undo luôn (logic cũ của bạn)
+                    // (Bạn có thể giữ logic Undo cũ cho máy ở đây nếu muốn)
+                    return;
+                }
+
+                SendCommand("UNDO_REQUEST"); // Gửi yêu cầu xin phép
+            };
             btnXinHoa = CreateButton("CẦU HÒA", 25, 250, 200, Color.Gray); btnXinHoa.Click += (s, e) => SendCommand("DRAW_REQUEST");
             btnXinThua = CreateButton("ĐẦU HÀNG", 25, 300, 200, Color.Maroon); btnXinThua.Click += (s, e) => { if (MessageBox.Show("Đầu hàng?", "Xác nhận", MessageBoxButtons.YesNo) == DialogResult.Yes) SendCommand("SURRENDER"); };
             ptbAvatar1 = new PictureBox { Size = new Size(60, 60), Location = new Point(25, 350), BorderStyle = BorderStyle.FixedSingle, SizeMode = PictureBoxSizeMode.StretchImage };
@@ -470,7 +520,17 @@ namespace CaroClient
                 if (thoiGianConLai > 0) { thoiGianConLai--; lblDongHo.Text = TimeSpan.FromSeconds(thoiGianConLai).ToString(@"mm\:ss"); prcbCoolDown.Value = Math.Min(thoiGianConLai, prcbCoolDown.Maximum); }
                 else { tmCoolDown.Stop(); if (CheDoChoi == "LAN") SendCommand("TIME_OUT"); else MessageBox.Show("Hết giờ! Bạn thua."); }
             };
-            try { if (File.Exists("x.png")) imgX = Image.FromFile("x.png"); if (File.Exists("o.png")) imgO = Image.FromFile("o.png"); } catch { }
+           
+            try
+            {
+                // Lấy ảnh trực tiếp từ Resources đã nhúng
+                imgX = Properties.Resources.x;
+                imgO = Properties.Resources.o;
+            }
+            catch
+            {
+                MessageBox.Show("Lỗi tải hình ảnh từ Resources!");
+            }
         }
 
         private void PnlChessBoard_Paint(object sender, PaintEventArgs e)
@@ -521,7 +581,7 @@ namespace CaroClient
                 Graphics g = pnlChessBoard.CreateGraphics(); g.SmoothingMode = SmoothingMode.AntiAlias; g.TranslateTransform(ox, oy);
                 DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
                 banCoAo[x, y] = 1;
-                PlaySound("click.wav");
+                PlaySound(Properties.Resources.Click);
                 playerMoveCount++;
                 if (CheckWinClient(banCoAo, x, y, 1)) { MessageBox.Show("Thắng rồi!"); return; }
                 isAiThinking = true; lblLuotDi.Text = "Máy đang nghĩ...";
@@ -529,7 +589,7 @@ namespace CaroClient
                     Thread.Sleep(800); Point move = aiBot.Execute(banCoAo, boardSize);
                     this.Invoke(new Action(() => {
                         Graphics g2 = pnlChessBoard.CreateGraphics(); g2.SmoothingMode = SmoothingMode.AntiAlias; g2.TranslateTransform(ox, oy);
-                        DrawChess(g2, imgO, "O", Brushes.Blue, move.X, move.Y, cs); banCoAo[move.X, move.Y] = 2; PlaySound("click.wav");
+                        DrawChess(g2, imgO, "O", Brushes.Blue, move.X, move.Y, cs); banCoAo[move.X, move.Y] = 2; PlaySound(Properties.Resources.Click);
                         if (CheckWinClient(banCoAo, move.X, move.Y, 2))
                         {
                             string thongBao = "";
@@ -589,12 +649,252 @@ namespace CaroClient
                     if (cmd == "LOGIN_SUCCESS") { string n = parts[1]; string r = parts[2]; isAdmin = (r == "1"); isLoggedIn = true; currentUsername = n; this.Invoke(new Action(() => { lblWelcome.Text = $"Xin chào, {n}!"; btnOpenAdmin.Visible = isAdmin; ShowScreen(pnlLobby); txtUserLogin.Clear(); txtPassLogin.Clear(); txtNickNameGuest.Clear(); })); }
                     else if (cmd == "LOGIN_FAIL" || cmd == "REGISTER_FAIL") { string r = parts[1]; this.Invoke(new Action(() => MessageBox.Show(r, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error))); }
                     else if (cmd == "REGISTER_SUCCESS") { this.Invoke(new Action(() => { MessageBox.Show("Đăng ký thành công!", "Thông báo"); ShowScreen(pnlLogin); })); }
+                    else if (cmd == "RESET_SUCCESS")
+                    {
+                        string content = parts[1]; // Đã đổi tên biến
+                        this.Invoke(new Action(() => MessageBox.Show(content, "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+                    }
+                    else if (cmd == "RESET_FAIL")
+                    {
+                        string content = parts[1]; // Đã đổi tên biến
+                        this.Invoke(new Action(() => MessageBox.Show(content, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error)));
+                    }
+                    // ... Trong vòng lặp while của ReceiveMessage ...
+
+                    else if (cmd == "UNDO_ASK")
+                    {
+                        // Đây là Client B nhận được câu hỏi
+                        string question = parts[1];
+                        DialogResult dr = MessageBox.Show(question, "Yêu cầu đi lại", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                        if (dr == DialogResult.Yes)
+                        {
+                            SendCommand("UNDO_ACCEPT"); // Đồng ý
+                        }
+                        else
+                        {
+                            SendCommand("UNDO_REJECT"); // Từ chối
+                        }
+                    }
+
+                    else if (cmd == "UNDO")
+                    {
+                        // Server bảo xóa quân cờ tại vị trí X, Y (Logic vẽ lại bàn cờ)
+                        int ux = int.Parse(parts[1]);
+                        int uy = int.Parse(parts[2]);
+
+                        this.Invoke(new Action(() => {
+                            // 1. Xóa quân cờ trên bàn cờ ảo (nếu có dùng mảng client)
+                            if (banCoAo != null) banCoAo[ux, uy] = 0;
+
+                            // 2. Vẽ lại ô đó thành ô trống (màu nền)
+                            Graphics g = pnlChessBoard.CreateGraphics();
+                            GetBoardMetrics(out float cs, out float ox, out float oy);
+                            g.TranslateTransform(ox, oy);
+
+                            // Vẽ đè một hình chữ nhật màu nền lên ô đó để xóa quân cờ
+                            // Lưu ý: Màu nền phải trùng với màu pnlChessBoard (WhiteSmoke)
+                            using (Brush eraser = new SolidBrush(Color.WhiteSmoke))
+                            {
+                                // Tính toán vị trí chính xác để xóa (cộng trừ 1px để không xóa mất đường kẻ)
+                                g.FillRectangle(eraser, ux * cs + 1, uy * cs + 1, cs - 2, cs - 2);
+                            }
+
+                            // 3. (Tùy chọn) Vẽ lại đường kẻ lưới cho ô đó nếu bị xóa mất
+                            using (Pen pen = new Pen(Color.Gray, 1))
+                            {
+                                g.DrawRectangle(pen, ux * cs, uy * cs, cs, cs);
+                            }
+
+                            // 4. Cập nhật lượt đi và Reset timer
+                            // Nếu vừa xóa nước của X -> Giờ đến lượt X đi lại
+                            string nguoiVuaBiXoa = (lblLuotDi.Text.Contains("X")) ? "O" : "X";
+                            // Logic hiển thị text này có thể cần chỉnh tùy theo game của bạn đang hiển thị gì
+                            // Tạm thời chỉ cần reset timer
+                            ResetTimer();
+                            PlaySound(Properties.Resources.Click); // Âm thanh báo hiệu
+                        }));
+                    }
                     else if (cmd == "WAITING_MATCH") { this.Invoke(new Action(() => MessageBox.Show("Đang tìm đối thủ...", "Thông báo"))); }
                     else if (cmd == "ROOM_CREATED") { string id = parts[1]; this.Invoke(new Action(() => MessageBox.Show($"Mã phòng: {id}", "Tạo phòng"))); }
-                    else if (cmd == "GAME_START") { if (parts.Length > 1) mySide = int.Parse(parts[1]); if (parts.Length > 2) boardSize = int.Parse(parts[2]); this.Invoke(new Action(() => { ShowScreen(pnlGame); ResetTimer(); lblLuotDi.Text = (mySide == 1) ? "Bắt đầu! Bạn đi trước (X)" : "Bắt đầu! Bạn đi sau (O)"; pnlChessBoard.Invalidate(); UpdateButtonStates(); })); }
-                    else if (cmd == "MOVE") { int x = int.Parse(parts[1]); int y = int.Parse(parts[2]); int s = int.Parse(parts[3]); this.Invoke(new Action(() => { PlaySound("click.wav"); Graphics g = pnlChessBoard.CreateGraphics(); g.SmoothingMode = SmoothingMode.AntiAlias; GetBoardMetrics(out float cs, out float ox, out float oy); g.TranslateTransform(ox, oy); if (s == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs); else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs); lblLuotDi.Text = (s == 1) ? "Đến lượt O" : "Đến lượt X"; ResetTimer(); UpdateButtonStates(); })); }
-                    else if (cmd == "MESSAGE") { string m = string.Join("|", parts, 1, parts.Length - 1); this.Invoke(new Action(() => { if (pnlLobby.Visible) MessageBox.Show(m); else { rtbChatLog.AppendText($"[Hệ thống] {m}\n"); rtbChatLog.ScrollToCaret(); } })); }
+                    else if (cmd == "GAME_START")
+                    {
+                        // Format: GAME_START | Side | BoardSize | OpponentName | OpponentAvatar
+                        mySide = int.Parse(parts[1]);
+                        boardSize = int.Parse(parts[2]);
+                        string opName = (parts.Length > 3) ? parts[3] : "Đối thủ";
+                        int opAvatarID = (parts.Length > 4) ? int.Parse(parts[4]) : 0;
 
+                        // Xác định avatar của BẢN THÂN (Logic tạm: Lấy random hoặc mặc định vì Client chưa có chỗ chọn)
+                        // Để đẹp, sau này bạn nên lưu AvatarID của mình khi Login thành công.
+                        // Tạm thời mình lấy mặc định là 0 cho mình.
+                        int myAvatarID = 0;
+
+                        this.Invoke(new Action(() => {
+                            ShowScreen(pnlGame);
+                            ResetTimer();
+                            pnlChessBoard.Invalidate();
+                            UpdateButtonStates();
+
+                            // Cập nhật Avatar và Tên
+                            if (mySide == 1) // Mình là Host (Trái)
+                            {
+                                ptbAvatar1.Image = GetAvatarByID(myAvatarID); // Mình
+                                ptbAvatar2.Image = GetAvatarByID(opAvatarID); // Đối thủ
+                                lblLuotDi.Text = $"Bạn (X) vs {opName} (O)";
+                            }
+                            else // Mình là Guest (Phải)
+                            {
+                                ptbAvatar1.Image = GetAvatarByID(opAvatarID); // Đối thủ (Host)
+                                ptbAvatar2.Image = GetAvatarByID(myAvatarID); // Mình
+                                lblLuotDi.Text = $"Bạn (O) vs {opName} (X)";
+                            }
+
+                            // Căn chỉnh ảnh cho đẹp (Stretch)
+                            ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
+                            ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
+                        }));
+                    }
+                    else if (cmd == "RECONNECT_GAME")
+                    {
+                        // Format: RECONNECT_GAME | Side | BoardSize | OpponentName | OpponentAvatar | HistoryString
+                        mySide = int.Parse(parts[1]);
+                        boardSize = int.Parse(parts[2]);
+                        string opName = parts[3];
+                        int opAvatar = int.Parse(parts[4]);
+                        string historyData = (parts.Length > 5) ? parts[5] : "";
+
+                        this.Invoke(new Action(() => {
+                            // 1. Chuyển màn hình
+                            ShowScreen(pnlGame);
+                            lblWelcome.Text = $"Xin chào, {currentUsername}!";
+
+                            // 2. Setup thông tin đối thủ
+                            if (mySide == 1)
+                            {
+                                lblLuotDi.Text = $"Bạn (X) vs {opName} (O)";
+                                ptbAvatar1.Image = GetAvatarByID(0); // Mình (Tạm)
+                                ptbAvatar2.Image = GetAvatarByID(opAvatar);
+                            }
+                            else
+                            {
+                                lblLuotDi.Text = $"Bạn (O) vs {opName} (X)";
+                                ptbAvatar1.Image = GetAvatarByID(opAvatar);
+                                ptbAvatar2.Image = GetAvatarByID(0); // Mình (Tạm)
+                            }
+                            ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
+                            ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
+
+                            // 3. VẼ LẠI BÀN CỜ TỪ LỊCH SỬ
+                            // Reset bàn cờ ảo
+                            if (banCoAo == null || banCoAo.GetLength(0) != boardSize)
+                                banCoAo = new int[boardSize, boardSize];
+                            else
+                                Array.Clear(banCoAo, 0, banCoAo.Length);
+
+                            // Xóa sạch hình vẽ cũ
+                            pnlChessBoard.Refresh();
+
+                            // Vẽ lại từng nước đi
+                            if (!string.IsNullOrEmpty(historyData))
+                            {
+                                string[] moves = historyData.Split(';');
+                                int turnCounter = 1; // 1: X đi, 2: O đi (Bắt đầu luôn là X)
+
+                                Graphics g = pnlChessBoard.CreateGraphics();
+                                g.SmoothingMode = SmoothingMode.AntiAlias;
+                                GetBoardMetrics(out float cs, out float ox, out float oy);
+                                g.TranslateTransform(ox, oy);
+
+                                foreach (string move in moves)
+                                {
+                                    if (string.IsNullOrWhiteSpace(move)) continue;
+                                    string[] coord = move.Split('|'); // Format history server là x|y
+                                    if (coord.Length < 2) continue;
+
+                                    int x = int.Parse(coord[0]);
+                                    int y = int.Parse(coord[1]);
+
+                                    // Cập nhật dữ liệu
+                                    banCoAo[x, y] = turnCounter;
+
+                                    // Vẽ
+                                    if (turnCounter == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                                    else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+
+                                    // Đổi lượt
+                                    turnCounter = (turnCounter == 1) ? 2 : 1;
+                                }
+
+                                // Cập nhật lại lượt đi hiện tại trên UI
+                                lblLuotDi.Text = (turnCounter == 1) ? "Đến lượt X" : "Đến lượt O";
+                            }
+
+                            UpdateButtonStates();
+                            MessageBox.Show("Đã kết nối lại trận đấu!", "Thông báo");
+                        }));
+                    }
+                    else if (cmd == "MOVE")
+                    {
+                        int x = int.Parse(parts[1]);
+                        int y = int.Parse(parts[2]);
+                        int s = int.Parse(parts[3]);
+
+                        this.Invoke(new Action(() => {
+                            // 1. Luôn kêu Click khi có người đặt quân cờ
+                            PlaySound(Properties.Resources.Click);
+
+                            // 2. Nếu người vừa đánh (s) KHÔNG PHẢI LÀ MÌNH -> Tức là đến lượt mình -> Kêu Ding
+                            if (s != mySide)
+                            {
+                                // Dùng Thread để kêu đè lên tiếng click (hoặc kêu sau 1 chút)
+                                Task.Delay(200).ContinueWith(t => PlaySound(Properties.Resources.ding));
+                            }
+
+                            // ... (Giữ nguyên đoạn vẽ bàn cờ phía sau) ...
+                            Graphics g = pnlChessBoard.CreateGraphics();
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            GetBoardMetrics(out float cs, out float ox, out float oy);
+                            g.TranslateTransform(ox, oy);
+                            if (s == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
+                            else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
+                            lblLuotDi.Text = (s == 1) ? "Đến lượt O" : "Đến lượt X";
+                            ResetTimer();
+                            UpdateButtonStates();
+                        }));
+                    }
+                    // --- Thay thế dòng 'else if (cmd == "MESSAGE")' cũ bằng đoạn này ---
+                    else if (cmd == "MESSAGE")
+                    {
+                        string m = string.Join("|", parts, 1, parts.Length - 1);
+                        this.Invoke(new Action(() => {
+                            PlaySound(Properties.Resources.ding); // <--- Kêu Ding khi có thông báo
+                            if (pnlLobby.Visible) MessageBox.Show(m);
+                            else { rtbChatLog.AppendText($"[Hệ thống] {m}\n"); rtbChatLog.ScrollToCaret(); }
+                        }));
+                    }
+                    else if (cmd == "CHAT") // <--- Bổ sung thêm phần Chat
+                    {
+                        string senderName = parts[1];
+                        string content = parts[2];
+                        this.Invoke(new Action(() => {
+                            PlaySound(Properties.Resources.ding); // <--- Kêu Ding khi có ai đó chat
+                            rtbChatLog.AppendText($"[{senderName}]: {content}\n");
+                            rtbChatLog.ScrollToCaret();
+                        }));
+                    }
+                    else if (cmd == "GAMEOVER")
+                    {
+                        int winnerSide = int.Parse(parts[1]);
+                        this.Invoke(new Action(() => {
+                            PlaySound(Properties.Resources.tada); // <--- Kêu Ding báo kết quả
+
+                            if (winnerSide == mySide) MessageBox.Show("CHÚC MỪNG! BẠN ĐÃ CHIẾN THẮNG!");
+                            else MessageBox.Show("Đáng tiếc, bạn đã thua!");
+
+                            // Reset game hoặc hiện nút chơi lại
+                        }));
+                    }
                 }
             }
             catch { this.Invoke(new Action(() => { if (!IsConnected()) { MessageBox.Show("Mất kết nối!"); ShowScreen(pnlLogin); } })); }
@@ -618,7 +918,21 @@ namespace CaroClient
         private void DrawChess(Graphics g, Image i, string t, Brush b, int x, int y, float s) { float sc = boardSize == 10 ? 0.8f : 0.75f; float sz = s * sc; float off = (s - sz) / 2; if (i != null) g.DrawImage(i, x * s + off, y * s + off, sz, sz); else g.DrawString(t, new Font("Arial", s * 0.5f, FontStyle.Bold), b, x * s + s * 0.2f, y * s + s * 0.1f); }
         private void SendChatMessage() { if (!string.IsNullOrWhiteSpace(txtMessage.Text)) { SendCommand($"CHAT|{txtMessage.Text}"); txtMessage.Clear(); } }
         private void ResetTimer() { thoiGianConLai = tongThoiGian; lblDongHo.Text = "03:00"; prcbCoolDown.Value = tongThoiGian; tmCoolDown.Start(); }
-        private void PlaySound(string f) { try { if (File.Exists(f)) new SoundPlayer(f).Play(); } catch { } }
+        // Hàm này không cần tham số nữa vì ta chỉ dùng 1 âm thanh click
+        // Thêm tham số 'sound' kiểu Stream để nhận file từ Resources
+        private void PlaySound(System.IO.Stream sound)
+        {
+            try
+            {
+                // Nếu âm thanh tồn tại thì mới chơi
+                if (sound != null)
+                {
+                    System.Media.SoundPlayer player = new System.Media.SoundPlayer(sound);
+                    player.Play();
+                }
+            }
+            catch { }
+        }
         private void UpdateButtonStates() { /* Cập nhật trạng thái nút Undo/NewGame */ }
         private void Form1_FormClosing(object sender, FormClosingEventArgs e) { try { if (IsConnected()) { SendCommand("DISCONNECT"); client.Close(); } } catch { } }
         private void Form1_Resize(object sender, EventArgs e) { if (pnlChessBoard != null && pnlChessBoard.Visible) pnlChessBoard.Invalidate(); CenterLoginControls(); CenterLobbyControls(); CenterRegisterControls(); }
@@ -630,5 +944,41 @@ namespace CaroClient
         private Button CreateButton(string t, int x, int y, int w, Color c) { Button b = new Button { Text = t, Location = new Point(x, y), Width = w, Height = 40, BackColor = c, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand }; return b; }
         private Button CreateBoardSizeButton(string t, string d, int x, int y, Color c) { return CreateButton($"{t}\n{d}", x, y, 400, c); }
         private GroupBox CreateGroupBox(string t, int w, int h) { return new GroupBox { Text = t, Size = new Size(w, h), ForeColor = Color.Gold, Font = new Font("Segoe UI", 14, FontStyle.Bold, GraphicsUnit.Point) }; }
+        
+        // Hàm hỗ trợ hiển thị hộp thoại nhập Email (Copy cái này dán vào cuối class Form1)
+        private string ShowInputDialog(string text, string caption)
+        {
+            Form prompt = new Form()
+            {
+                Width = 400,
+                Height = 180,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                Text = caption,
+                StartPosition = FormStartPosition.CenterScreen
+            };
+            Label textLabel = new Label() { Left = 20, Top = 20, Text = text, Width = 350 };
+            TextBox textBox = new TextBox() { Left = 20, Top = 50, Width = 340 };
+            Button confirmation = new Button() { Text = "Gửi yêu cầu", Left = 230, Width = 130, Top = 90, DialogResult = DialogResult.OK };
+            confirmation.Click += (sender, e) => { prompt.Close(); };
+            prompt.Controls.Add(textLabel);
+            prompt.Controls.Add(textBox);
+            prompt.Controls.Add(confirmation);
+            prompt.AcceptButton = confirmation;
+
+            return prompt.ShowDialog() == DialogResult.OK ? textBox.Text : "";
+        }
+        private Image GetAvatarByID(int id)
+        {
+            // Ánh xạ ID sang ảnh trong Resources
+            // Bạn cần đảm bảo đã thêm ảnh avatar0, avatar1... vào Resources
+            switch (id)
+            {
+                case 0: return Properties.Resources.avatar0; // Thay bằng tên file ảnh của bạn
+                case 1: return Properties.Resources.avatar1;
+                case 2: return Properties.Resources.avatar2;
+                case 3: return Properties.Resources.avatar3;
+                default: return Properties.Resources.avatar0; // Mặc định
+            }
+        }
     }
 }

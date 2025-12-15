@@ -1,13 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Mail;
 using System.Net.Sockets;
+using System.Security.Cryptography; // Để dùng MD5
 using System.Text;
 using System.Threading;
-using System.Data.SqlClient;
-
 namespace CaroServer
 {
     internal class Program
@@ -19,6 +20,15 @@ namespace CaroServer
         // --- CẤU TRÚC DỮ LIỆU ---
         private static List<Room> activeRooms = new List<Room>();
         private static Dictionary<TcpClient, PlayerInfo> onlinePlayers = new Dictionary<TcpClient, PlayerInfo>();
+        // Lưu trữ những người chơi vừa bị rớt mạng (Key: UserID, Value: Thông tin phòng/trận đấu)
+        private static Dictionary<int, PendingReconnect> pendingDisconnects = new Dictionary<int, PendingReconnect>();
+
+        class PendingReconnect
+        {
+            public PlayerInfo Info { get; set; }
+            public Room Room { get; set; }
+            public DateTime DisconnectTime { get; set; }
+        }
         private static readonly object _lock = new object();
 
         class PlayerInfo
@@ -26,6 +36,7 @@ namespace CaroServer
             public int UserID { get; set; }
             public string Username { get; set; }
             public string DisplayName { get; set; }
+            public int AvatarID { get; set; } = 0;
             public bool IsAdmin { get; set; } = false;
             public bool IsInGame { get; set; } = false;
             public bool IsLoggedIn { get; set; } = false;
@@ -113,7 +124,8 @@ namespace CaroServer
                 Console.WriteLine("7. Bàn cờ 10x10, 15x15, 20x20");
                 Console.WriteLine("=========================================");
                 Console.WriteLine(">> SERVER ĐANG CHẠY...");
-
+                // Chạy luồng dọn dẹp các kết nối chờ (ngay trước vòng lặp while)
+                new Thread(CleanupPendingDisconnects).Start();
                 while (true)
                 {
                     TcpClient client = listener.AcceptTcpClient();
@@ -156,6 +168,11 @@ namespace CaroServer
                     {
                         HandleRegister(client, parts, writer);
                     }
+                    else if (command == "RESET_PASS")
+                    {
+                        string email = parts[1];
+                        HandleResetPassword(client, email, writer);
+                    }
                     // --- XỬ LÝ ĐĂNG NHẬP GUEST ---
                     else if (command == "QUICK_CONNECT")
                     {
@@ -173,12 +190,67 @@ namespace CaroServer
                         string user = parts[1];
                         string pass = parts[2];
 
-                        if (CheckLoginDB(user, pass, out int uId, out string dName, out bool adm))
+                        // Khai báo biến hứng giá trị avatar
+                        int uId, uAvatar;
+                        string dName;
+                        bool adm;
+
+                        // Gọi hàm mới sửa
+                        if (CheckLoginDB(user, pass, out uId, out dName, out adm, out uAvatar))
                         {
+                            lock (_lock)
+                            {
+                                // --- LOGIC MỚI: KIỂM TRA TÁI KẾT NỐI ---
+                                if (pendingDisconnects.ContainsKey(uId))
+                                {
+                                    var pending = pendingDisconnects[uId];
+
+                                    // 1. Khôi phục thông tin vào onlinePlayers với Socket mới (client hiện tại)
+                                    RegisterPlayer(client, user, dName, adm, true, uId, uAvatar);
+
+                                    // 2. Cập nhật lại Socket trong Room (Thay cái socket cũ chết bằng socket mới)
+                                    Room room = pending.Room;
+                                    for (int i = 0; i < room.Players.Count; i++)
+                                    {
+                                        // Tìm socket cũ trong Room (Socket không nằm trong onlinePlayers nữa là socket cũ)
+                                        if (!onlinePlayers.ContainsKey(room.Players[i]))
+                                        {
+                                            room.Players[i] = client; // Thay thế
+                                            break;
+                                        }
+                                    }
+
+                                    // 3. Xóa khỏi danh sách chờ
+                                    pendingDisconnects.Remove(uId);
+
+                                    writer.WriteLine($"LOGIN_SUCCESS|{dName}|{(adm ? "1" : "0")}");
+                                    Console.WriteLine($">> {user} đã tái kết nối thành công!");
+
+                                    // 4. GỬI LẠI BÀN CỜ ĐỂ CLIENT VẼ LẠI
+                                    // Format: RECONNECT_GAME | Side | BoardSize | OpponentName | OpponentAvatar | HistoryString
+
+                                    int myIndex = room.Players.IndexOf(client);
+                                    int side = (myIndex == 0) ? 1 : 2;
+                                    TcpClient op = (room.Players.Count > 1) ? room.Players[(side == 1) ? 1 : 0] : null;
+                                    string opName = (op != null && onlinePlayers.ContainsKey(op)) ? onlinePlayers[op].DisplayName : "Unknown";
+                                    int opAvatar = (op != null && onlinePlayers.ContainsKey(op)) ? onlinePlayers[op].AvatarID : 0;
+
+                                    // Gom lịch sử nước đi thành chuỗi: "x1,y1;x2,y2;..."
+                                    // Lưu ý: History là Stack, cần Reverse để lấy đúng thứ tự từ đầu
+                                    string historyStr = string.Join(";", room.History.Reverse().ToArray());
+
+                                    SendToClient(client, $"RECONNECT_GAME|{side}|{room.BoardSize}|{opName}|{opAvatar}|{historyStr}");
+
+                                    // Báo cho đối thủ biết
+                                    if (op != null) SendToClient(op, "MESSAGE|Đối thủ đã quay lại!");
+                                    return; // Kết thúc luôn, không chạy logic Login mới
+                                }
+                                // ----------------------------------------
+                            }
+
                             KickIfAccountLoggedIn(user, client);
-                            RegisterPlayer(client, user, dName, adm, true, uId);
+                            RegisterPlayer(client, user, dName, adm, true, uId, uAvatar);
                             writer.WriteLine($"LOGIN_SUCCESS|{dName}|{(adm ? "1" : "0")}");
-                            Console.WriteLine($">> Đăng nhập thành công: {user} ({dName})");
                         }
                         else
                         {
@@ -287,7 +359,35 @@ namespace CaroServer
                 RemoveClient(oldClient);
             }
         }
+        // --- HÀM ĐĂNG KÝ VÀO DATABASE ---
+        static bool RegisterPlayerToDB(string username, string password, string displayName, string email)
+        {
+            try
+            {
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    // Câu lệnh INSERT vào bảng NguoiChoi
+                    // Lưu ý: Đảm bảo bảng NguoiChoi trong SQL của bạn đã có các cột này
+                    string query = @"INSERT INTO NguoiChoi (TaiKhoan, MatKhau, TenHienThi, Email, NgayDangKy, Diem, SoTranThang, SoTranThua, SoTranHoa, IsAdmin) 
+                     VALUES (@u, @p, @d, @e, GETDATE(), 1000, 0, 0, 0, 0)";
 
+                    SqlCommand cmd = new SqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@u", username);
+                    cmd.Parameters.AddWithValue("@p", password);
+                    cmd.Parameters.AddWithValue("@d", displayName);
+                    // Xử lý trường hợp email rỗng thì lưu NULL
+                    cmd.Parameters.AddWithValue("@e", string.IsNullOrEmpty(email) ? DBNull.Value : (object)email);
+
+                    return cmd.ExecuteNonQuery() > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Lỗi đăng ký DB: {ex.Message}");
+                return false;
+            }
+        }
         // =================================================================================
         // XỬ LÝ ĐĂNG KÝ
         // =================================================================================
@@ -360,32 +460,160 @@ namespace CaroServer
                 writer.WriteLine("REGISTER_FAIL|Lỗi đăng ký. Vui lòng thử lại!");
             }
         }
-        // --- HÀM ĐĂNG KÝ VÀO DATABASE (Cần thêm vào Program.cs) ---
-        static bool RegisterPlayerToDB(string username, string password, string displayName, string email)
+        // --- [NEW] XỬ LÝ QUÊN MẬT KHẨU ---
+        static void HandleResetPassword(TcpClient client, string email, StreamWriter writer)
+        {
+            Console.WriteLine($">> Yêu cầu reset mật khẩu cho email: {email}");
+
+            // 1. Kiểm tra Email có tồn tại trong DB không
+            if (!CheckEmailExists(email))
+            {
+                writer.WriteLine("RESET_FAIL|Email này chưa được đăng ký!");
+                return;
+            }
+
+            // 2. Tạo mật khẩu mới ngẫu nhiên (6 ký tự)
+            string newPass = GenerateRandomPassword(6);
+
+            // 3. Cập nhật mật khẩu mới vào Database (Lưu dạng MD5)
+            string hashedPass = CalculateMD5(newPass); // Server cần hàm MD5 để lưu
+            if (UpdatePasswordInDB(email, hashedPass))
+            {
+                // 4. Gửi email cho người dùng
+                bool sendResult = SendEmail(email, "Cấp lại mật khẩu Caro Game", $"Mật khẩu mới của bạn là: {newPass}\nVui lòng đăng nhập và đổi lại mật khẩu ngay.");
+
+                if (sendResult)
+                    writer.WriteLine("RESET_SUCCESS|Mật khẩu mới đã được gửi vào Email của bạn!");
+                else
+                    writer.WriteLine("RESET_FAIL|Lỗi khi gửi Email. Vui lòng thử lại sau.");
+            }
+            else
+            {
+                writer.WriteLine("RESET_FAIL|Lỗi Database. Không thể cập nhật mật khẩu.");
+            }
+        }
+
+        // --- [NEW] HÀM KIỂM TRA EMAIL TỒN TẠI ---
+        static bool CheckEmailExists(string email)
         {
             try
             {
                 using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
-                    // Câu lệnh INSERT vào bảng NguoiChoi
-                    string query = @"INSERT INTO NguoiChoi (TaiKhoan, MatKhau, TenHienThi, Email, NgayDangKy, Diem, SoTranThang, SoTranThua, SoTranHoa, IsAdmin) 
-                             VALUES (@u, @p, @d, @e, GETDATE(), 1000, 0, 0, 0, 0)";
-
+                    string query = "SELECT COUNT(*) FROM NguoiChoi WHERE Email = @e";
                     SqlCommand cmd = new SqlCommand(query, conn);
-                    cmd.Parameters.AddWithValue("@u", username);
-                    cmd.Parameters.AddWithValue("@p", password);
-                    cmd.Parameters.AddWithValue("@d", displayName);
-                    // Xử lý email null
-                    cmd.Parameters.AddWithValue("@e", string.IsNullOrEmpty(email) ? DBNull.Value : (object)email);
+                    cmd.Parameters.AddWithValue("@e", email);
+                    int count = (int)cmd.ExecuteScalar();
+                    return count > 0;
+                }
+            }
+            catch { return false; }
+        }
 
+        // --- [NEW] HÀM CẬP NHẬT MẬT KHẨU ---
+        static bool UpdatePasswordInDB(string email, string newPassHash)
+        {
+            try
+            {
+                using (SqlConnection conn = new SqlConnection(connectionString))
+                {
+                    conn.Open();
+                    string query = "UPDATE NguoiChoi SET MatKhau = @p WHERE Email = @e";
+                    SqlCommand cmd = new SqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@p", newPassHash);
+                    cmd.Parameters.AddWithValue("@e", email);
                     return cmd.ExecuteNonQuery() > 0;
                 }
             }
+            catch { return false; }
+        }
+
+        // --- [NEW] HÀM GỬI EMAIL (QUAN TRỌNG: CẦN CẤU HÌNH) ---
+        static bool SendEmail(string toEmail, string subject, string body)
+        {
+            try
+            {
+                // CẤU HÌNH GMAIL CỦA BẠN Ở ĐÂY
+                string fromEmail = "luannguyenqn.00@gmail.com";
+                string password = "mcro eoly edqp qfru"; // KHÔNG PHẢI PASS GMAIL, LÀ APP PASSWORD
+
+                SmtpClient smtp = new SmtpClient("smtp.gmail.com", 587);
+                smtp.EnableSsl = true;
+                smtp.DeliveryMethod = SmtpDeliveryMethod.Network;
+                smtp.UseDefaultCredentials = false;
+                smtp.Credentials = new NetworkCredential(fromEmail, password);
+
+                MailMessage msg = new MailMessage();
+                msg.From = new MailAddress(fromEmail, "Caro Game Server");
+                msg.To.Add(new MailAddress(toEmail));
+                msg.Subject = subject;
+                msg.Body = body;
+
+                smtp.Send(msg);
+                Console.WriteLine($">> Đã gửi mail thành công cho {toEmail}");
+                return true;
+            }
             catch (Exception ex)
             {
-                Console.WriteLine($"Lỗi đăng ký DB: {ex.Message}");
+                Console.WriteLine($">> Lỗi gửi mail: {ex.Message}");
                 return false;
+            }
+        }
+
+        // --- [NEW] HÀM SINH PASS NGẪU NHIÊN ---
+        static string GenerateRandomPassword(int length)
+        {
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            Random random = new Random();
+            return new string(Enumerable.Repeat(chars, length)
+                .Select(s => s[random.Next(s.Length)]).ToArray());
+        }
+
+        // --- [NEW] HÀM MD5 CHO SERVER (Vì Server cũng cần hash để lưu vào DB) ---
+        static string CalculateMD5(string input)
+        {
+            using (MD5 md5 = MD5.Create())
+            {
+                byte[] inputBytes = Encoding.ASCII.GetBytes(input);
+                byte[] hashBytes = md5.ComputeHash(inputBytes);
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < hashBytes.Length; i++)
+                {
+                    sb.Append(hashBytes[i].ToString("X2"));
+                }
+                return sb.ToString();
+            }
+        }
+        // --- HÀM ĐĂNG KÝ VÀO DATABASE (Cần thêm vào Program.cs) ---
+        // Sửa hàm RegisterPlayer
+        static void RegisterPlayer(TcpClient client, string username, string displayName, bool isAdmin, bool isLoggedIn, int userId = -1, int avatarId = 0)
+        {
+            lock (_lock)
+            {
+                if (!onlinePlayers.ContainsKey(client))
+                {
+                    onlinePlayers.Add(client, new PlayerInfo
+                    {
+                        UserID = userId,
+                        Username = username,
+                        DisplayName = displayName,
+                        AvatarID = avatarId, // <--- Lưu
+                        IsAdmin = isAdmin,
+                        IsLoggedIn = isLoggedIn
+                    });
+                }
+                else
+                {
+                    // Cập nhật
+                    var info = onlinePlayers[client];
+                    info.UserID = userId;
+                    info.Username = username;
+                    info.DisplayName = displayName;
+                    info.AvatarID = avatarId; // <--- Lưu
+                    info.IsAdmin = isAdmin;
+                    info.IsLoggedIn = isLoggedIn;
+                }
             }
         }
         static bool IsValidEmail(string email)
@@ -476,19 +704,20 @@ namespace CaroServer
         // XỬ LÝ ĐĂNG NHẬP
         // =================================================================================
 
-        static bool CheckLoginDB(string username, string password, out int userId, out string displayName, out bool isAdmin)
+        static bool CheckLoginDB(string username, string password, out int userId, out string displayName, out bool isAdmin, out int avatarId) // <--- Thêm out avatarId
         {
-            userId = -1; // Mặc định
+            userId = -1;
             displayName = username;
             isAdmin = false;
+            avatarId = 0; // <--- Mặc định
 
             try
             {
                 using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
-                    // Lấy thêm cột ID
-                    string query = "SELECT ID, TenHienThi, IsAdmin FROM NguoiChoi WHERE TaiKhoan = @u AND MatKhau = @p";
+                    // Lấy thêm cột AvatarID
+                    string query = "SELECT ID, TenHienThi, IsAdmin, AvatarID FROM NguoiChoi WHERE TaiKhoan = @u AND MatKhau = @p";
                     SqlCommand cmd = new SqlCommand(query, conn);
                     cmd.Parameters.AddWithValue("@u", username);
                     cmd.Parameters.AddWithValue("@p", password);
@@ -497,9 +726,14 @@ namespace CaroServer
                     {
                         if (r.Read())
                         {
-                            userId = (int)r["ID"]; // Lấy ID từ DB
+                            userId = (int)r["ID"];
                             displayName = r["TenHienThi"].ToString();
                             isAdmin = Convert.ToBoolean(r["IsAdmin"]);
+
+                            // Đọc AvatarID từ DB (Kiểm tra null cho chắc)
+                            if (r["AvatarID"] != DBNull.Value)
+                                avatarId = (int)r["AvatarID"];
+
                             return true;
                         }
                     }
@@ -697,7 +931,22 @@ namespace CaroServer
                     }
                     break;
 
-                case "UNDO":
+                // --- TÌM CASE "UNDO" CŨ VÀ XÓA ĐI, THAY BẰNG ĐOẠN NÀY ---
+
+                case "UNDO_REQUEST":
+                    // Người chơi A muốn xin đi lại -> Gửi thông báo hỏi ý kiến người chơi B
+                    if (opponent != null)
+                    {
+                        SendToClient(opponent, "UNDO_ASK|Đối thủ muốn xin đi lại một nước. Bạn có đồng ý không?");
+                    }
+                    else
+                    {
+                        writer.WriteLine("MESSAGE|Đối thủ đã thoát, không thể xin đi lại!");
+                    }
+                    break;
+
+                case "UNDO_ACCEPT":
+                    // Người chơi B đồng ý -> Thực hiện Logic Undo cũ tại đây
                     if (room.History.Count > 0)
                     {
                         string lastMove = room.History.Pop();
@@ -706,10 +955,25 @@ namespace CaroServer
                         int uy = int.Parse(pos[1]);
 
                         room.Board[ux, uy] = 0;
-                        room.Turn = (room.Turn == 1) ? 2 : 1;
+                        room.Turn = (room.Turn == 1) ? 2 : 1; // Đổi lại lượt
+
+                        // Gửi lệnh cập nhật bàn cờ cho CẢ HAI người (để xóa quân cờ trên UI)
                         BroadcastToRoom(room, $"UNDO|{ux}|{uy}");
+
+                        // Thông báo cho người xin biết là được đồng ý
+                        if (opponent != null) SendToClient(opponent, "MESSAGE|Đối thủ đã CHẤP NHẬN cho bạn đi lại!");
                     }
                     break;
+
+                case "UNDO_REJECT":
+                    // Người chơi B từ chối -> Báo lại cho A biết
+                    if (opponent != null)
+                    {
+                        SendToClient(opponent, "MESSAGE|Đối thủ ĐÃ TỪ CHỐI yêu cầu đi lại của bạn!");
+                    }
+                    break;
+
+                // --------------------------------------------------------
 
                 case "SURRENDER":
                     int winner = (side == 1) ? 2 : 1;
@@ -848,28 +1112,27 @@ namespace CaroServer
         {
             room.IsGameStarted = true;
 
-            for (int i = 0; i < room.Players.Count; i++)
-            {
-                int side = (i == 0) ? 1 : 2;
-                if (onlinePlayers.ContainsKey(room.Players[i]))
-                {
-                    onlinePlayers[room.Players[i]].IsInGame = true;
-                }
-                SendToClient(room.Players[i], $"GAME_START|{side}|{room.BoardSize}");
-            }
-            if (onlinePlayers.ContainsKey(room.Players[0]) && onlinePlayers.ContainsKey(room.Players[1]))
-            {
-                int p1 = onlinePlayers[room.Players[0]].UserID;
-                int p2 = onlinePlayers[room.Players[1]].UserID;
+            // Lấy thông tin 2 người chơi
+            TcpClient p1 = room.Players[0];
+            TcpClient p2 = (room.Players.Count > 1) ? room.Players[1] : null;
 
-                // Chỉ lưu nếu cả 2 đã đăng nhập (Guest ko lưu)
-                if (p1 > 0 && p2 > 0)
-                {
-                    room.CurrentMatchID = DB_TaoTranDau(p1, p2, room.BoardSize);
-                    Console.WriteLine($">> Đã tạo MatchID: {room.CurrentMatchID} trong DB");
-                }
+            int p1Avatar = onlinePlayers.ContainsKey(p1) ? onlinePlayers[p1].AvatarID : 0;
+            int p2Avatar = (p2 != null && onlinePlayers.ContainsKey(p2)) ? onlinePlayers[p2].AvatarID : 0;
+
+            string p1Name = onlinePlayers.ContainsKey(p1) ? onlinePlayers[p1].DisplayName : "Unknown";
+            string p2Name = (p2 != null && onlinePlayers.ContainsKey(p2)) ? onlinePlayers[p2].DisplayName : "Máy";
+
+            // Gửi cho Player 1 (Bạn là X, Đối thủ là O) -> Gửi Avatar O cho P1
+            // Format: GAME_START | Side | BoardSize | OpponentName | OpponentAvatar
+            SendToClient(p1, $"GAME_START|1|{room.BoardSize}|{p2Name}|{p2Avatar}");
+
+            // Gửi cho Player 2 (Bạn là O, Đối thủ là X) -> Gửi Avatar X cho P2
+            if (p2 != null)
+            {
+                SendToClient(p2, $"GAME_START|2|{room.BoardSize}|{p1Name}|{p1Avatar}");
             }
-            Console.WriteLine($">> Phòng {room.RoomID} bắt đầu (Bàn: {room.BoardSize}x{room.BoardSize})");
+
+            // ... (Đoạn code lưu vào DB giữ nguyên)
         }
 
         static void SendAdminData(StreamWriter writer)
@@ -1035,44 +1298,62 @@ namespace CaroServer
             {
                 lock (_lock)
                 {
-                    // Tìm và xóa khỏi phòng
-                    Room room = FindRoomByClient(client);
-                    if (room != null)
-                    {
-                        room.Players.Remove(client);
-
-                        // Thông báo cho player còn lại
-                        foreach (var other in room.Players)
-                        {
-                            SendToClient(other, "MESSAGE|Đối thủ đã rời khỏi phòng!");
-                            SendToClient(other, "OPPONENT_LEFT");
-                        }
-
-                        // Xóa phòng nếu trống
-                        if (room.Players.Count == 0)
-                        {
-                            activeRooms.Remove(room);
-                        }
-                    }
-
-                    // Xóa khỏi danh sách online
                     if (onlinePlayers.ContainsKey(client))
                     {
-                        onlinePlayers.Remove(client);
+                        PlayerInfo info = onlinePlayers[client];
+                        Room room = FindRoomByClient(client);
+
+                        // --- LOGIC MỚI: NẾU ĐANG CHƠI THÌ KHÔNG XÓA NGAY ---
+                        if (info.IsInGame && room != null && info.UserID > 0) // Chỉ áp dụng cho User đã đăng nhập
+                        {
+                            Console.WriteLine($">> {info.Username} bị mất kết nối. Đang chờ quay lại...");
+
+                            // 1. Lưu vào danh sách chờ
+                            if (!pendingDisconnects.ContainsKey(info.UserID))
+                            {
+                                pendingDisconnects.Add(info.UserID, new PendingReconnect
+                                {
+                                    Info = info,
+                                    Room = room,
+                                    DisconnectTime = DateTime.Now
+                                });
+                            }
+
+                            // 2. Thông báo cho đối thủ biết
+                            TcpClient opponent = room.Players.FirstOrDefault(p => p != client);
+                            if (opponent != null)
+                            {
+                                SendToClient(opponent, "MESSAGE|Đối thủ bị mất kết nối! Đang chờ 60s...");
+                            }
+
+                            // 3. Xóa socket cũ khỏi danh sách online (vì nó chết rồi)
+                            onlinePlayers.Remove(client);
+
+                            // Lưu ý: KHÔNG xóa phòng, KHÔNG xóa player khỏi Room.Players vội
+                        }
+                        else
+                        {
+                            // --- LOGIC CŨ: XÓA BÌNH THƯỜNG ---
+                            if (room != null)
+                            {
+                                room.Players.Remove(client);
+                                foreach (var other in room.Players)
+                                {
+                                    SendToClient(other, "MESSAGE|Đối thủ đã rời phòng!");
+                                    SendToClient(other, "OPPONENT_LEFT");
+                                }
+                                if (room.Players.Count == 0) activeRooms.Remove(room);
+                            }
+                            onlinePlayers.Remove(client);
+                        }
                     }
 
-                    // Đóng kết nối
-                    if (client != null)
-                    {
-                        client.Close();
-                    }
+                    if (client != null) client.Close();
                 }
-
-                Console.WriteLine($">> Client disconnected. Online: {onlinePlayers.Count}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Lỗi khi remove client: {ex.Message}");
+                Console.WriteLine($"Lỗi RemoveClient: {ex.Message}");
             }
         }
         // 1. Tạo bản ghi trận đấu mới khi Game bắt đầu (Trả về MatchID)
@@ -1213,6 +1494,44 @@ namespace CaroServer
             {
                 Console.WriteLine(ex.Message);
                 writer.WriteLine("MESSAGE|Lỗi lấy lịch sử!");
+            }
+        }
+        // Thêm dòng này vào Main(): new Thread(CleanupPendingDisconnects).Start();
+
+        static void CleanupPendingDisconnects()
+        {
+            while (true)
+            {
+                Thread.Sleep(5000); // Kiểm tra mỗi 5s
+                lock (_lock)
+                {
+                    List<int> toRemove = new List<int>();
+                    foreach (var item in pendingDisconnects)
+                    {
+                        // Nếu quá 60 giây
+                        if ((DateTime.Now - item.Value.DisconnectTime).TotalSeconds > 60)
+                        {
+                            var pending = item.Value;
+                            Console.WriteLine($">> Hết thời gian chờ: {pending.Info.Username} -> Xử thua.");
+
+                            // Xử lý game over (Xử thua)
+                            Room room = pending.Room;
+                            if (room != null && activeRooms.Contains(room))
+                            {
+                                // Tìm người còn lại để báo thắng
+                                TcpClient opponent = room.Players.FirstOrDefault(p => onlinePlayers.ContainsKey(p) && onlinePlayers[p].UserID != pending.Info.UserID);
+                                if (opponent != null)
+                                {
+                                    SendToClient(opponent, "MESSAGE|Đối thủ không quay lại. Bạn thắng!");
+                                    SendToClient(opponent, "GAMEOVER|WIN_BY_DISCONNECT"); // Bạn cần xử lý cái này ở Client nếu muốn
+                                }
+                                activeRooms.Remove(room);
+                            }
+                            toRemove.Add(item.Key);
+                        }
+                    }
+                    foreach (int id in toRemove) pendingDisconnects.Remove(id);
+                }
             }
         }
     }
