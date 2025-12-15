@@ -1112,7 +1112,7 @@ namespace CaroClient
                     {
                         int winnerSide = int.Parse(parts[1]);
 
-                        // 1. Nhận tọa độ dây thắng (Nếu có)
+                        // Nhận tọa độ và vẽ đường kẻ
                         if (parts.Length > 2)
                         {
                             int sx = int.Parse(parts[2]);
@@ -1122,14 +1122,19 @@ namespace CaroClient
 
                             winStart = new Point(sx, sy);
                             winEnd = new Point(ex, ey);
-
-                            // Vẽ lại bàn cờ để hiện đường kẻ đỏ
-                            pnlChessBoard.Invalidate();
                         }
 
-                        tmCoolDown.Stop();
-                        string thongBao = (winnerSide == mySide) ? "BẠN ĐÃ THẮNG! 🏆" : "BẠN ĐÃ THUA! 😢";
-                        this.Invoke(new Action(() => MessageBox.Show(thongBao)));
+                        this.Invoke(new Action(() => {
+                            tmCoolDown.Stop();
+
+                            // 1. Vẽ lại bàn cờ để hiện đường kẻ đỏ
+                            pnlChessBoard.Invalidate();
+                            pnlChessBoard.Update(); // [QUAN TRỌNG] Ép vẽ ngay lập tức, không đợi
+
+                            // 2. Hiện thông báo sau khi đã vẽ xong
+                            string thongBao = (winnerSide == mySide) ? "BẠN ĐÃ THẮNG! 🏆" : "BẠN ĐÃ THUA! 😢";
+                            MessageBox.Show(thongBao, "Kết thúc trận đấu");
+                        }));
                     }
                     else if (cmd == "NEW_GAME")
                     {

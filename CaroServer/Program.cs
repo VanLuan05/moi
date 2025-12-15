@@ -1133,37 +1133,37 @@ namespace CaroServer
         // =================================================================================
         // KIỂM TRA THẮNG THUA (CARO LOGIC)
         // =================================================================================
-        // Hàm CheckWin mới: Trả về tọa độ điểm đầu (sx, sy) và điểm cuối (ex, ey) của dây thắng
-        // Hàm CheckWin mới: Trả về tọa độ điểm đầu (sx, sy) và điểm cuối (ex, ey) của dây thắng
         static bool CheckWin(int[,] board, int x, int y, int side, int size, out int sx, out int sy, out int ex, out int ey)
         {
-            sx = -1; sy = -1; ex = -1; ey = -1; // Mặc định chưa tìm thấy
+            sx = -1; sy = -1; ex = -1; ey = -1;
 
-            int[] dx = { 1, 0, 1, 1 }; // Ngang, Dọc, Chéo Chính, Chéo Phụ
+            int[] dx = { 1, 0, 1, 1 };
             int[] dy = { 0, 1, 1, -1 };
 
             for (int dir = 0; dir < 4; dir++)
             {
                 int count = 1;
                 int i = 1;
-                // 1. Quét về phía dương
+                // Quét chiều dương
                 while (true)
                 {
                     int nx = x + i * dx[dir];
                     int ny = y + i * dy[dir];
-                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[ny, nx] != side) break;
+                    // [SỬA LỖI TẠI ĐÂY]: Đổi board[ny, nx] thành board[nx, ny]
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
                     count++; i++;
                 }
                 int endX = x + (i - 1) * dx[dir];
                 int endY = y + (i - 1) * dy[dir];
 
-                // 2. Quét về phía âm
+                // Quét chiều âm
                 int j = 1;
                 while (true)
                 {
                     int nx = x - j * dx[dir];
                     int ny = y - j * dy[dir];
-                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[ny, nx] != side) break;
+                    // [SỬA LỖI TẠI ĐÂY]: Đổi board[ny, nx] thành board[nx, ny]
+                    if (nx < 0 || nx >= size || ny < 0 || ny >= size || board[nx, ny] != side) break;
                     count++; j++;
                 }
                 int startX = x - (j - 1) * dx[dir];
@@ -1171,7 +1171,6 @@ namespace CaroServer
 
                 if (count >= 5)
                 {
-                    // Gán giá trị output để gửi về Client
                     sx = startX; sy = startY;
                     ex = endX; ey = endY;
                     return true;
