@@ -75,7 +75,7 @@ namespace CaroClient
         private TextBox txtRegUsername, txtRegPassword, txtRegConfirmPassword, txtRegDisplayName, txtRegEmail;
         private Label lblRegStatus;
         private CheckBox chkAcceptTerms;
-        private RichTextBox rtbAdminData;
+        private TextBox rtbAdminData;
         private TextBox txtKickUser;
         private Button btnKick, btnBackFromAdmin;
         private Panel pnlChessBoard;
@@ -785,7 +785,17 @@ namespace CaroClient
         private void SetupAdminScreen()
         {
             pnlAdmin.Controls.Add(new Label { Text = "QUẢN TRỊ VIÊN", Font = new Font("Segoe UI", 20, FontStyle.Bold), ForeColor = Color.Red, Location = new Point(20, 20), AutoSize = true });
-            rtbAdminData = new RichTextBox { Location = new Point(20, 70), Size = new Size(800, 500), Font = new Font("Consolas", 10), ReadOnly = true }; pnlAdmin.Controls.Add(rtbAdminData);
+            rtbAdminData = new TextBox
+            {
+                Location = new Point(20, 70),
+                Size = new Size(800, 500),
+                Font = new Font("Consolas", 10),
+                ReadOnly = true,
+                Multiline = true,             // Cho phép nhiều dòng
+                ScrollBars = ScrollBars.Vertical, // Có thanh cuộn dọc
+                BackColor = Color.White       // Màu nền trắng cho dễ đọc
+            };
+            pnlAdmin.Controls.Add(rtbAdminData);
             txtKickUser = CreateInput("User to Kick...", 850, 70, 200); btnKick = CreateButton("KICK", 850, 110, 200, Color.DarkRed); btnKick.Click += (s, e) => { if (!string.IsNullOrWhiteSpace(txtKickUser.Text)) SendCommand($"ADMIN_KICK|{txtKickUser.Text}"); };
             btnBackFromAdmin = CreateButton("BACK", 850, 200, 200, Color.Gray); btnBackFromAdmin.Click += (s, e) => ShowScreen(pnlLobby);
             pnlAdmin.Controls.Add(txtKickUser); pnlAdmin.Controls.Add(btnKick); pnlAdmin.Controls.Add(btnBackFromAdmin);
@@ -2695,6 +2705,7 @@ namespace CaroClient
         }
 
         // Lớp RichTextBox tùy chỉnh để hỗ trợ Emoji màu
+        // --- THAY THẾ TOÀN BỘ CLASS EXRICHTEXTBOX CŨ BẰNG CLASS NÀY ---
         public class ExRichTextBox : RichTextBox
         {
             [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
@@ -2704,15 +2715,21 @@ namespace CaroClient
             {
                 get
                 {
-                    CreateParams createParams = base.CreateParams;
+                    CreateParams cp = base.CreateParams;
                     try
                     {
-                        // Nạp thư viện MsftEdit.dll (Chứa RichEdit 5.0 hỗ trợ Emoji màu)
+                        // Nạp thư viện RichEdit50W
                         LoadLibrary("MsftEdit.dll");
-                        createParams.ClassName = "RichEdit50W";
+
+                        // Cấu hình dùng Class mới
+                        cp.ClassName = "RichEdit50W";
                     }
-                    catch { } // Nếu lỗi thì kệ, dùng mặc định
-                    return createParams;
+                    catch
+                    {
+                        // Nếu lỗi thì kệ nó, tự động dùng RichTextBox thường
+                        // Không để văng lỗi "Class already exists"
+                    }
+                    return cp;
                 }
             }
         }
