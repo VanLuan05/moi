@@ -376,6 +376,73 @@ namespace CaroServer
                             }
                         }
                     }
+                    // --- XỬ LÝ YÊU CẦU VÁN MỚI (NEW_GAME_FLOW) ---
+                    // --- XỬ LÝ CẦU HÒA (DRAW FLOW) ---
+                    else if (command == "DRAW_REQUEST")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null && r.Players.Count > 1)
+                        {
+                            // Chuyển lời sang đối thủ
+                            TcpClient opponent = (r.Players[0] == client) ? r.Players[1] : r.Players[0];
+                            if (opponent != null) SendToClient(opponent, "DRAW_ASK");
+                        }
+                    }
+                    else if (command == "DRAW_ACCEPT")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null)
+                        {
+                            // Gửi lệnh GAME_DRAW cho cả 2
+                            foreach (var p in r.Players) SendToClient(p, "GAME_DRAW");
+
+                            // (Nếu có tính điểm Elo: Cộng điểm ít hơn cho cả 2)
+                        }
+                    }
+                    else if (command == "DRAW_REJECT")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null)
+                        {
+                            TcpClient opponent = (r.Players[0] == client) ? r.Players[1] : r.Players[0];
+                            if (opponent != null) SendToClient(opponent, "DRAW_REFUSED");
+                        }
+                    }
+                    else if (command == "NEW_GAME_ACCEPT")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null)
+                        {
+                            // 1. Reset logic bàn cờ
+                            r.Board = new int[r.BoardSize, r.BoardSize];
+                            r.History.Clear();
+
+                            // --- [QUAN TRỌNG: BỎ COMMENT DÒNG NÀY ĐỂ RESET LƯỢT VỀ X] ---
+                            r.Turn = 1; // Bắt buộc phải có để X được đi trước
+                                        // -------------------------------------------------------------
+
+                            // 2. Thông báo cho mọi người
+                            foreach (var p in r.Players) SendToClient(p, "NEW_GAME");
+                            if (r.Spectators != null)
+                            {
+                                foreach (var s in r.Spectators) SendToClient(s, "NEW_GAME");
+                            }
+                        }
+                    }
+                    else if (command == "NEW_GAME_REJECT")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null && r.Players.Count > 1)
+                        {
+                            // Tìm đối thủ để báo tin buồn
+                            TcpClient opponent = (r.Players[0] == client) ? r.Players[1] : r.Players[0];
+
+                            if (opponent != null)
+                            {
+                                SendToClient(opponent, "NEW_GAME_REJECT");
+                            }
+                        }
+                    }
                     // --- XỬ LÝ TRONG GAME ---
                     else
                     {

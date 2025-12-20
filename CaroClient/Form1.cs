@@ -28,6 +28,14 @@ namespace CaroClient
         private Point winStart = new Point(-1, -1);
         private Point winEnd = new Point(-1, -1);
         private int[,] currBoard;
+        // 0: Sáng (Mặc định), 1: Tối (Dark), 2: Gỗ (Wood)
+        private int currentTheme = 0;
+        // --- BIẾN HIỆU ỨNG ---
+        private System.Windows.Forms.Timer tmAnimation; // Timer để tạo nhấp nháy
+        private bool isGameOverEffect = false;          // Cờ báo hiệu game kết thúc chưa
+        private string endResultText = "";              // Chữ hiển thị (THẮNG/THUA)
+        private Color endResultColor = Color.Gold;      // Màu chữ
+        private bool blinkToggle = false;               // Biến đảo trạng thái nhấp nháy
         // --- BIẾN CHO EMOTE NÂNG CAO (SLIDING) ---
         // 1. Danh sách Icon phong phú hơn
         // Danh sách Icon (Em có thể thêm bao nhiêu tùy thích)
@@ -48,7 +56,7 @@ namespace CaroClient
         private Panel pnlLobbyEmoteSelector; // Bảng chọn Emote ở sảnh
         private bool isMusicOn = true; // Trạng thái nhạc
         private System.Media.SoundPlayer bgmPlayer; // Máy phát nhạc
-                                                    // --- BIẾN ÂM THANH ---
+        private int currentLevel = 1; // Mặc định là Dễ                   // --- BIẾN ÂM THANH ---
         private WMPLib.WindowsMediaPlayer musicPlayer = new WMPLib.WindowsMediaPlayer();
         private Button btnToggleMusic; // Nút bật tắt nhạc trên màn hình game
         // --- CONTROL TOÀN CỤC ĐỂ QUẢN LÝ VỊ TRÍ ---
@@ -974,13 +982,49 @@ namespace CaroClient
             int btnX = 40;
 
             btnNewGame = CreateButton("VÁN MỚI", btnX, btnY, btnW, Color.Teal);
-            btnNewGame.Click += (s, e) => SendCommand("NEW_GAME");
+            btnNewGame.Click += (s, e) =>
+            {
+                // Nếu chơi với máy thì reset luôn không cần hỏi
+                if (CheDoChoi == "VS_MAY")
+                {
+                    StartPvEGame(currentLevel); 
+                }
+                // Nếu chơi Online thì phải xin phép
+                else
+                {
+                    // Kiểm tra xem có đang chơi không, hoặc hết ván mới được xin (tùy em)
+                    SendCommand("NEW_GAME_REQUEST");
+
+                    // Disable nút đi để tránh spam
+                    btnNewGame.Enabled = false;
+                    btnNewGame.Text = "Đang chờ...";
+                }
+            };
 
             btnUndo = CreateButton("XIN ĐI LẠI", btnX, btnY + 60, btnW, Color.Goldenrod);
             btnUndo.Click += (s, e) => { if (CheDoChoi != "VS_MAY") SendCommand("UNDO_REQUEST"); };
 
             btnXinHoa = CreateButton("CẦU HÒA", btnX, btnY + 120, btnW, Color.Gray);
-            btnXinHoa.Click += (s, e) => SendCommand("DRAW_REQUEST");
+            btnXinHoa.Click += (s, e) =>
+            {
+                // 1. Nếu chơi với Máy: Máy không biết hòa (hoặc em có thể cho máy random đồng ý)
+                if (CheDoChoi == "VS_MAY")
+                {
+                    MessageBox.Show("Máy tính bảo: 'Đã đánh là phải phân thắng bại!'", "Thông báo");
+                    return;
+                }
+
+                // 2. Nếu chơi Online
+                DialogResult confirm = MessageBox.Show("Bạn có chắc muốn xin hòa không?", "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (confirm == DialogResult.Yes)
+                {
+                    SendCommand("DRAW_REQUEST");
+
+                    // Khóa nút lại để chờ phản hồi
+                    btnXinHoa.Enabled = false;
+                    btnXinHoa.Text = "Đang xin...";
+                }
+            };
 
             btnXinThua = CreateButton("ĐẦU HÀNG", btnX, btnY + 180, btnW, Color.Maroon);
             btnXinThua.Click += (s, e) => { if (MessageBox.Show("Chắc chắn đầu hàng?", "Xác nhận", MessageBoxButtons.YesNo) == DialogResult.Yes) SendCommand("SURRENDER"); };
@@ -1000,7 +1044,20 @@ namespace CaroClient
             right.Controls.Add(lblDongHo);
             right.Controls.Add(btnToggleMusic);
             right.Controls.Add(prcbCoolDown);
+            Button btnTheme = CreateButton("🎨 Đổi màu", 40, 520, 200, Color.Purple); // Vị trí nằm trên nút Rời phòng
+            btnTheme.Click += (s, e) => {
+                // Đổi vòng tròn: 0 -> 1 -> 2 -> 0
+                currentTheme++;
+                if (currentTheme > 2) currentTheme = 0;
 
+                // Vẽ lại bàn cờ ngay lập tức
+                pnlChessBoard.Invalidate();
+
+                // Thông báo nhỏ (tuỳ chọn)
+                string themeName = currentTheme == 0 ? "Sáng" : (currentTheme == 1 ? "Tối" : "Gỗ");
+                // MessageBox.Show($"Đã đổi sang giao diện: {themeName}"); 
+            };
+            right.Controls.Add(btnTheme);
             // Add Avatar & Emote (Emote phải Add sau hoặc BringToFront)
             right.Controls.Add(ptbAvatar1);
             right.Controls.Add(ptbAvatar2);
@@ -1016,7 +1073,7 @@ namespace CaroClient
             right.Controls.Add(btnXinHoa);
             right.Controls.Add(btnXinThua);
             right.Controls.Add(btnLeaveGame);
-
+            SetDoubleBuffered(pnlChessBoard); // Bật chống giật cho bàn cờ
             // Timer ẩn Emote
             tmHideEmote = new System.Windows.Forms.Timer { Interval = 3000 };
             tmHideEmote.Tick += (s, e) => {
@@ -1030,6 +1087,7 @@ namespace CaroClient
         // Thêm tham số 'level' vào hàm
         private void StartPvEGame(int level)
         {
+            currentLevel = level;
             CheDoChoi = "VS_MAY";
             boardSize = 15;
             mySide = 1;
@@ -1056,18 +1114,46 @@ namespace CaroClient
             ResetTimer();
         }
 
+        // Win vẽ đường thắng
         private void InitializeGameLogic()
         {
             CheckForIllegalCrossThreadCalls = false;
             tmCoolDown = new System.Windows.Forms.Timer { Interval = 1000 };
+
+            // --- [SỬA ĐOẠN NÀY] ---
             tmCoolDown.Tick += (s, e) => {
-                if (thoiGianConLai > 0) { thoiGianConLai--; lblDongHo.Text = TimeSpan.FromSeconds(thoiGianConLai).ToString(@"mm\:ss"); prcbCoolDown.Value = Math.Min(thoiGianConLai, prcbCoolDown.Maximum); }
-                else { tmCoolDown.Stop(); if (CheDoChoi == "LAN") SendCommand("TIME_OUT"); else MessageBox.Show("Hết giờ! Bạn thua."); }
+                if (thoiGianConLai > 0)
+                {
+                    thoiGianConLai--;
+                    lblDongHo.Text = TimeSpan.FromSeconds(thoiGianConLai).ToString(@"mm\:ss");
+                    prcbCoolDown.Value = Math.Min(thoiGianConLai, prcbCoolDown.Maximum);
+                    blinkToggle = !blinkToggle; // Đảo trạng thái nhấp nháy
+                    pnlChessBoard.Invalidate(); // Vẽ lại bàn cờ
+                    // --- [CHÈN CODE ÂM THANH HỒI HỘP VÀO ĐÂY] ---
+                    if (thoiGianConLai <= 10) // Nếu còn dưới 10 giây
+                    {
+                        lblDongHo.ForeColor = Color.Red; // Đổi màu chữ sang đỏ
+
+                        // Phát tiếng "Bụp" (Click) mỗi giây để giả lập tiếng kim đồng hồ
+                        PlaySound(Properties.Resources.Click);
+                    }
+                    else
+                    {
+                        lblDongHo.ForeColor = Color.Cyan; // Trả lại màu xanh bình thường
+                    }
+                    // ----------------------------------------------
+                }
+                else
+                {
+                    tmCoolDown.Stop();
+                    if (CheDoChoi == "LAN") SendCommand("TIME_OUT");
+                    else MessageBox.Show("Hết giờ! Bạn thua.");
+                }
             };
-           
+            // ----------------------
+
             try
             {
-                // Lấy ảnh trực tiếp từ Resources đã nhúng
                 imgX = Properties.Resources.x;
                 imgO = Properties.Resources.o;
             }
@@ -1082,6 +1168,22 @@ namespace CaroClient
             // 1. Luôn xóa nền trước (Tránh màn hình đen/trong suốt)
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color gridColor = Color.Gray; // Màu đường kẻ mặc định
+            if (currentTheme == 0) // Sáng
+            {
+                g.Clear(Color.WhiteSmoke);
+                gridColor = Color.Gray;
+            }
+            else if (currentTheme == 1) // Tối (Dark Mode)
+            {
+                g.Clear(Color.FromArgb(40, 40, 40));
+                gridColor = Color.DimGray;
+            }
+            else if (currentTheme == 2) // Gỗ (Wood)
+            {
+                g.Clear(Color.BurlyWood);
+                gridColor = Color.SaddleBrown;
+            }
             g.Clear(Color.WhiteSmoke); // Tô màu nền bàn cờ
 
             // 2. Kiểm tra boardSize hợp lệ
@@ -1097,7 +1199,7 @@ namespace CaroClient
             g.TranslateTransform(ox, oy);
 
             // 4. Vẽ lưới bàn cờ
-            using (Pen pen = new Pen(Color.Gray, 1))
+            using (Pen pen = new Pen(gridColor, 1))
             {
                 for (int i = 0; i <= boardSize; i++)
                 {
@@ -1143,6 +1245,38 @@ namespace CaroClient
                     g.DrawLine(winPen, x1, y1, x2, y2);
                 }
             }
+            // --- [THAY THẾ ĐOẠN IF CŨ BẰNG ĐOẠN NÀY] ---
+            if (isGameOverEffect)
+            {
+                e.Graphics.ResetTransform();
+                // 1. Vẽ màn đen mờ (Overlay)
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb(180, 0, 0, 0))) // Tăng độ tối lên 180 cho chữ nổi hơn
+                {
+                    e.Graphics.FillRectangle(brush, 0, 0, pnlChessBoard.Width, pnlChessBoard.Height);
+                }
+
+                // 2. Vẽ chữ (Chỉ vẽ khi nhấp nháy)
+                if (blinkToggle)
+                {
+                    // Bật chế độ vẽ chữ đẹp (Khử răng cưa)
+                    e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+
+                    // Cấu hình Font và Căn giữa
+                    using (Font f = new Font("Segoe UI", 48, FontStyle.Bold)) // Em có thể giảm 48 xuống 36 nếu chữ to quá
+                    using (SolidBrush textBrush = new SolidBrush(endResultColor))
+                    using (StringFormat sf = new StringFormat())
+                    {
+                        sf.Alignment = StringAlignment.Center;     // Căn giữa ngang
+                        sf.LineAlignment = StringAlignment.Center; // Căn giữa dọc
+
+                        // Vẽ chữ vào chính giữa Panel
+                        e.Graphics.DrawString(endResultText, f, textBrush,
+                            new RectangleF(0, 0, pnlChessBoard.Width, pnlChessBoard.Height),
+                            sf);
+                    }
+                }
+            }
+            // -------------------------------------------
         }
 
         private void PnlChessBoard_MouseClick(object sender, MouseEventArgs e)
@@ -1152,6 +1286,7 @@ namespace CaroClient
             if (cx < 0 || cy < 0) return;
             int x = (int)(cx / cs); int y = (int)(cy / cs);
             if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) return;
+            PlaySound(Properties.Resources.Click); // Tiếng Bụp
             if (CheDoChoi == "SPECTATOR") return; // Khán giả không được đánh
             if (CheDoChoi == "VS_MAY")
             {
@@ -1363,25 +1498,29 @@ namespace CaroClient
                         int s = int.Parse(parts[3]);
 
                         this.Invoke(new Action(() => {
+                            // 1. Luôn phát tiếng Bụp khi có quân cờ đặt xuống
                             PlaySound(Properties.Resources.Click);
 
-                            // Nếu không phải mình đánh -> Kêu Ding báo hiệu
+                            // 2. Nếu là đối thủ đánh -> Kêu Ding
                             if (s != mySide)
                             {
                                 Task.Delay(200).ContinueWith(t => PlaySound(Properties.Resources.ding));
                             }
 
-                            // Lưu vào mảng client
+                            // 3. Cập nhật dữ liệu bàn cờ
                             if (banCoAo != null && x >= 0 && x < boardSize && y >= 0 && y < boardSize)
                             {
                                 banCoAo[x, y] = s;
                             }
 
-                            // Vẽ quân cờ
+                            // 4. Vẽ quân cờ (Có ResetTransform để chống lệch)
                             Graphics g = pnlChessBoard.CreateGraphics();
                             g.SmoothingMode = SmoothingMode.AntiAlias;
                             GetBoardMetrics(out float cs, out float ox, out float oy);
+
+                            g.ResetTransform(); // <--- Rất quan trọng để fix lỗi lệch tâm
                             g.TranslateTransform(ox, oy);
+
                             if (s == 1) DrawChess(g, imgX, "X", Brushes.Red, x, y, cs);
                             else DrawChess(g, imgO, "O", Brushes.Blue, x, y, cs);
 
@@ -1409,56 +1548,192 @@ namespace CaroClient
                         this.Invoke(new Action(() => {
                             tmCoolDown.Stop();
 
-                            // 1. Vẽ lại bàn cờ để hiện đường kẻ đỏ
-                            pnlChessBoard.Invalidate();
-                            pnlChessBoard.Update(); // [QUAN TRỌNG] Ép vẽ ngay lập tức, không đợi
+                            isGameOverEffect = true; // Bật cờ hiệu ứng
 
-                            // 2. Hiện thông báo sau khi đã vẽ xong
-                            string thongBao = (winnerSide == mySide) ? "BẠN ĐÃ THẮNG! 🏆" : "BẠN ĐÃ THUA! 😢";
-                            MessageBox.Show(thongBao, "Kết thúc trận đấu");
+                            if (winnerSide == mySide)
+                            {
+                                endResultText = "🏆 CHIẾN THẮNG 🏆";
+                                endResultColor = Color.Gold;
+                                PlaySound(Properties.Resources.tada); // Âm thanh thắng (nếu có)
+                            }
+                            else
+                            {
+                                endResultText = "💀 THẤT BẠI 💀";
+                                endResultColor = Color.Red;
+                                // PlaySound(Properties.Resources.sad);
+                            }
+
+                            // Kiểm tra kỹ trước khi Start
+                            if (tmAnimation == null)
+                            {
+                                // Nếu chưa có thì tạo mới luôn cho chắc ăn
+                                tmAnimation = new System.Windows.Forms.Timer { Interval = 500 };
+                                tmAnimation.Tick += (sender, args) => {
+                                    blinkToggle = !blinkToggle;
+                                    pnlChessBoard.Invalidate();
+                                };
+                            }
+                            tmAnimation.Start();
+                            pnlChessBoard.Invalidate(); // Vẽ ngay lập tức
+                                                        // -------------------------
+                        }));
+                    }
+                    else if (cmd == "NEW_GAME_ASK")
+                    {
+                        this.Invoke(new Action(() => {
+                            // Hiện bảng hỏi
+                            DialogResult dr = MessageBox.Show(
+                                "Đối thủ muốn bắt đầu ván mới. Bạn có đồng ý không?",
+                                "Yêu cầu Ván mới",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Question
+                            );
+
+                            if (dr == DialogResult.Yes)
+                            {
+                                SendCommand("NEW_GAME_ACCEPT");
+                            }
+                            else
+                            {
+                                SendCommand("NEW_GAME_REJECT");
+                            }
+                        }));
+                    }
+                    else if (cmd == "NEW_GAME_REJECT")
+                    {
+                        this.Invoke(new Action(() => {
+                            MessageBox.Show("Đối thủ đã từ chối yêu cầu ván mới!", "Thông báo");
+
+                            // Mở lại nút để bấm tiếp
+                            btnNewGame.Enabled = true;
+                            btnNewGame.Text = "VÁN MỚI";
                         }));
                     }
                     else if (cmd == "NEW_GAME")
                     {
-                        // Reset tọa độ thắng
-                        winStart = new Point(-1, -1);
-                        winEnd = new Point(-1, -1);
-
                         this.Invoke(new Action(() => {
-                            // --- [SỬA LỖI TẠI ĐÂY] ---
-                            // Phải xóa dữ liệu trong mảng banCoAo (Mảng dùng để vẽ)
+                            // 1. [QUAN TRỌNG] Tắt hiệu ứng Chiến thắng/Thua cuộc (Nếu có)
+                            isGameOverEffect = false;       // Tắt cờ hiệu ứng
+                            if (tmAnimation != null) tmAnimation.Stop(); // Dừng nhấp nháy
+
+                            // 2. Reset tọa độ đường gạch đỏ
+                            winStart = new Point(-1, -1);
+                            winEnd = new Point(-1, -1);
+
+                            // 3. Xóa dữ liệu bàn cờ (Reset về 0)
                             if (banCoAo != null)
                             {
-                                // Nếu kích thước không đổi, chỉ cần xóa dữ liệu về 0
+                                // Nếu kích thước bàn cờ vẫn đúng -> Chỉ cần xóa trắng dữ liệu (Nhanh hơn)
                                 if (banCoAo.GetLength(0) == boardSize)
                                 {
                                     Array.Clear(banCoAo, 0, banCoAo.Length);
                                 }
                                 else
                                 {
-                                    // Nếu kích thước thay đổi (ít gặp nhưng cứ đề phòng), tạo mới
+                                    // Nếu kích thước thay đổi (ít gặp) -> Tạo mới
                                     banCoAo = new int[boardSize, boardSize];
                                 }
                             }
                             else
                             {
+                                // Nếu chưa có thì tạo mới
                                 banCoAo = new int[boardSize, boardSize];
                             }
-                            // -------------------------
 
-                            // Cập nhật giao diện
-                            pnlChessBoard.Invalidate(); // Vẽ lại bàn cờ trắng
-                            ResetTimer(); // Reset đồng hồ về 03:00
+                            // 4. Vẽ lại giao diện sạch sẽ
+                            pnlChessBoard.Invalidate();
 
-                            // Hiển thị thông báo tùy theo chế độ
+                            // 5. Reset Đồng hồ & Thông báo
+                            ResetTimer();
+
                             if (CheDoChoi == "SPECTATOR")
                             {
                                 lblLuotDi.Text = "Hai người chơi đang bắt đầu ván mới...";
                             }
                             else
                             {
-                                lblLuotDi.Text = "Ván mới bắt đầu...";
+                                // Mặc định ván mới thì X (Side 1) luôn đi trước
+                                if (mySide == 1)
+                                {
+                                    lblLuotDi.Text = "Đến lượt BẠN (X)"; // Có chữ "BẠN" và "X" -> Client cho phép đánh
+                                    PlaySound(Properties.Resources.ding); // Ting ting nhắc nhở
+                                }
+                                else
+                                {
+                                    lblLuotDi.Text = "Đến lượt Đối thủ (X)";
+                                }
                             }
+
+                            // (Tùy chọn) Phát nhạc nền lại nếu cần
+                            PlayGameMusic();
+                            if (btnNewGame != null)
+                            {
+                                btnNewGame.Enabled = true;
+                                btnNewGame.Text = "VÁN MỚI";
+                            }
+                        }));
+                    }
+                    // --- XỬ LÝ HÒA ---
+                    else if (cmd == "DRAW_ASK")
+                    {
+                        this.Invoke(new Action(() => {
+                            // Hiện bảng hỏi Ý kiến
+                            DialogResult dr = MessageBox.Show(
+                                "Đối thủ nhận thấy ván cờ bế tắc và muốn xin HÒA.\nBạn có đồng ý không?",
+                                "Lời mời Hòa",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Question
+                            );
+
+                            if (dr == DialogResult.Yes) SendCommand("DRAW_ACCEPT");
+                            else SendCommand("DRAW_REJECT");
+                        }));
+                    }
+                    else if (cmd == "DRAW_REFUSED")
+                    {
+                        this.Invoke(new Action(() => {
+                            MessageBox.Show("Đối thủ không đồng ý hòa! Hãy chiến đấu tiếp.", "Từ chối");
+                            // Mở lại nút
+                            btnXinHoa.Enabled = true;
+                            btnXinHoa.Text = "Xin hòa";
+                        }));
+                    }
+                    else if (cmd == "GAME_DRAW")
+                    {
+                        this.Invoke(new Action(() => {
+                            // 1. Dừng đồng hồ
+                            tmCoolDown.Stop();
+                            if (tmAnimation != null)
+                            {
+                                tmAnimation.Stop();
+                            } // Nếu đang có hiệu ứng gì đó
+
+                            // 2. Hiện hiệu ứng HÒA (Tận dụng cái hiệu ứng Victory xịn xò lúc nãy)
+                            isGameOverEffect = true;
+                            endResultText = "🤝 HÒA NHAU 🤝";
+                            endResultColor = Color.LightSkyBlue; // Màu xanh nhẹ nhàng tình cảm
+
+                            // Kiểm tra kỹ trước khi Start
+                            if (tmAnimation == null)
+                            {
+                                // Nếu chưa có thì tạo mới luôn cho chắc ăn
+                                tmAnimation = new System.Windows.Forms.Timer { Interval = 500 };
+                                tmAnimation.Tick += (sender, args) => {
+                                    blinkToggle = !blinkToggle;
+                                    pnlChessBoard.Invalidate();
+                                };
+                            }
+                            tmAnimation.Start();
+                            pnlChessBoard.Invalidate();
+
+                            // 3. Thông báo text
+                            lblLuotDi.Text = "Kết quả: Bất phân thắng bại!";
+
+                            // 4. Mở nút Ván mới để chơi lại
+                            if (btnNewGame != null) btnNewGame.Enabled = true;
+
+                            // 5. Khóa nút Xin hòa (Hòa rồi thì xin gì nữa)
+                            btnXinHoa.Enabled = false;
                         }));
                     }
                     // --- XỬ LÝ HÒA (BỔ SUNG) ---
@@ -1561,33 +1836,68 @@ namespace CaroClient
                     // --- CÁC LOGIC KHÁC ---
                     else if (cmd == "GAME_START")
                     {
+                        // 1. Parse dữ liệu từ Server gửi về
                         mySide = int.Parse(parts[1]);
                         boardSize = int.Parse(parts[2]);
                         string opName = (parts.Length > 3) ? parts[3] : "Đối thủ";
                         int opAvatarID = (parts.Length > 4) ? int.Parse(parts[4]) : 0;
 
                         this.Invoke(new Action(() => {
+                            // --- [BẮT ĐẦU ĐOẠN SỬA LỖI (Dọn dẹp hiệu ứng cũ)] ---
+                            // 1. Tắt cờ hiệu ứng và dừng đèn nhấp nháy
+                            isGameOverEffect = false;
+                            if (tmAnimation != null) tmAnimation.Stop();
+
+                            // 2. Reset các nút chức năng về trạng thái ban đầu
+                            // (Tránh trường hợp ván trước xin hòa/ván mới xong nút bị disable)
+                            if (btnXinHoa != null)
+                            {
+                                btnXinHoa.Enabled = true;
+                                btnXinHoa.Text = "Xin hòa";
+                            }
+                            if (btnNewGame != null)
+                            {
+                                btnNewGame.Enabled = true;
+                                btnNewGame.Text = "VÁN MỚI";
+                            }
+
+                            // 3. Reset toạ độ đường gạch đỏ (nếu có)
+                            winStart = new Point(-1, -1);
+                            winEnd = new Point(-1, -1);
+                            // ----------------------------------------------------
+
+                            // --- [CODE CŨ CỦA EM GIỮ NGUYÊN BÊN DƯỚI] ---
                             ShowScreen(pnlGame);
                             ResetTimer();
                             PlayGameMusic();
-                            btnToggleMusic.Text = isMusicOn ? "🔊" : "🔇";
+
+                            // Kiểm tra null để tránh lỗi nếu chưa tạo nút ToggleMusic
+                            if (btnToggleMusic != null) btnToggleMusic.Text = isMusicOn ? "🔊" : "🔇";
+
                             banCoAo = new int[boardSize, boardSize];
-                            pnlChessBoard.Invalidate();
+                            pnlChessBoard.Invalidate(); // Vẽ lại bàn cờ mới tinh
                             UpdateButtonStates();
 
-                            // Setup Avatar
+                            // Setup Avatar và Label hiển thị
                             if (mySide == 1)
                             {
-                                ptbAvatar1.Image = GetAvatarByID(0); ptbAvatar2.Image = GetAvatarByID(opAvatarID);
-                                lblLuotDi.Text = $"Bạn (X) vs {opName} (O)";
+                                // Mình là X (P1)
+                                // Lưu ý: Avatar của mình (GetUserAvatar) vs Avatar đối thủ
+                                // Nếu em dùng hàm GetAvatarByID(0) cho mình thì OK, giữ nguyên logic của em
+                                if (ptbAvatar1 != null) ptbAvatar1.Image = GetAvatarByID(0);
+                                if (ptbAvatar2 != null) ptbAvatar2.Image = GetAvatarByID(opAvatarID);
+                                if (lblLuotDi != null) lblLuotDi.Text = $"Bạn (X) vs {opName} (O)";
                             }
                             else
                             {
-                                ptbAvatar1.Image = GetAvatarByID(opAvatarID); ptbAvatar2.Image = GetAvatarByID(0);
-                                lblLuotDi.Text = $"Bạn (O) vs {opName} (X)";
+                                // Mình là O (P2)
+                                if (ptbAvatar1 != null) ptbAvatar1.Image = GetAvatarByID(opAvatarID);
+                                if (ptbAvatar2 != null) ptbAvatar2.Image = GetAvatarByID(0);
+                                if (lblLuotDi != null) lblLuotDi.Text = $"Bạn (O) vs {opName} (X)";
                             }
-                            ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
-                            ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
+
+                            if (ptbAvatar1 != null) ptbAvatar1.SizeMode = PictureBoxSizeMode.StretchImage;
+                            if (ptbAvatar2 != null) ptbAvatar2.SizeMode = PictureBoxSizeMode.StretchImage;
                         }));
                     }
                     else if (cmd == "RECONNECT_GAME")
@@ -1946,6 +2256,14 @@ namespace CaroClient
             }
             catch (Exception ex) { MessageBox.Show("Lỗi kết nối: " + ex.Message); }
         }
+        // Hàm kích hoạt chế độ chống giật cho Panel
+        public static void SetDoubleBuffered(System.Windows.Forms.Control c)
+        {
+            if (System.Windows.Forms.SystemInformation.TerminalServerSession)
+                return;
+            System.Reflection.PropertyInfo aProp = typeof(System.Windows.Forms.Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            aProp.SetValue(c, true, null);
+        }
         private void RegisterAccount() { /* Logic đăng ký cũ */ if (txtRegPassword.Text == txtRegConfirmPassword.Text) { try { client = new TcpClient(); client.Connect("127.0.0.1", 8080); NetworkStream st = client.GetStream(); writer = new StreamWriter(st) { AutoFlush = true }; reader = new StreamReader(st); new Thread(ReceiveMessage) { IsBackground = true }.Start(); SendCommand($"REGISTER|{txtRegUsername.Text}|{CalculateMD5Hash(txtRegPassword.Text)}|{txtRegDisplayName.Text}|{txtRegEmail.Text}"); } catch { MessageBox.Show("Lỗi kết nối Server"); } } else MessageBox.Show("Mật khẩu không khớp"); }
         private void SendCommand(string c) { try { if (IsConnected()) writer.WriteLine(c); } catch { } }
         private bool IsConnected() { return client != null && client.Connected; }
@@ -2269,7 +2587,7 @@ namespace CaroClient
         private void PlayMusic()
         {
             // Nếu bạn đã thêm file bgm.wav vào Resources:
-            if (bgmPlayer == null) bgmPlayer = new System.Media.SoundPlayer(Properties.Resources.bgm);
+            if (bgmPlayer == null) bgmPlayer = new System.Media.SoundPlayer(Properties.Resources.ding);
             bgmPlayer.PlayLooping();
         }
 
@@ -2287,15 +2605,18 @@ namespace CaroClient
                 // Đường dẫn file nhạc (nằm cùng thư mục với file exe)
                 string musicPath = System.IO.Path.Combine(Application.StartupPath, "bgm.mp3");
 
-                if (System.IO.File.Exists(musicPath))
+                if (bgmPlayer == null)
                 {
-                    musicPlayer.URL = musicPath;
-                    musicPlayer.settings.setMode("loop", true); // Tự động lặp lại
-                    musicPlayer.settings.volume = 30; // Âm lượng vừa phải (0-100)
-                    musicPlayer.controls.play();
+                    // Properties.Resources.bgm chính là file look_up_mastered.wav em đã add
+                    bgmPlayer = new System.Media.SoundPlayer(Properties.Resources.bgm);
                 }
+
+                bgmPlayer.PlayLooping(); // Phát lặp lại liên tục
             }
-            catch { /* Bỏ qua lỗi nếu không tìm thấy file nhạc */ }
+            catch
+            {
+                // Nếu lỗi thì thôi, không làm phiền người chơi
+            }
         }
 
         private void StopGameMusic()
