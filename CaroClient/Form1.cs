@@ -28,7 +28,20 @@ namespace CaroClient
         private Point winStart = new Point(-1, -1);
         private Point winEnd = new Point(-1, -1);
         private int[,] currBoard;
+        // --- BIẾN CHO EMOTE NÂNG CAO (SLIDING) ---
+        // 1. Danh sách Icon phong phú hơn
+        // Danh sách Icon (Em có thể thêm bao nhiêu tùy thích)
+        private string[] listEmojis = {
+    "😂", "😡", "😭", "😎", "😍", "🤔", "😅", "👋", "👍", "👎",
+    "💩", "👻", "👽", "🤖", "🔥", "💔", "❤️", "🎉", "zzz", "👀",
+    "✨", "🎵", "🎲", "🎯", "🚀"
+};
 
+        // 2. Biến phục vụ việc Kéo (Drag)
+        private bool isDraggingEmote = false;
+        private int lastMouseX;
+        private int dragThreshold = 5; // Độ nhạy, di chuyển quá 5px mới tính là kéo
+        private bool isClickAction = true; // Để phân biệt giữa Click (chọn) và Drag (kéo)
         // --- BIẾN CHAT LOBBY ---
         private RichTextBox rtbLobbyChat;
         private TextBox txtLobbyMessage;
@@ -86,7 +99,7 @@ namespace CaroClient
         private bool isLoggedIn = false;
         private string currentUsername = "";
         private int playerMoveCount = 0;
-
+        private Panel pnlDifficulty; // Panel chọn độ khó
         // Biến mới thêm
         public string CheDoChoi = "LAN";
         private bool isGuest = false;
@@ -118,7 +131,10 @@ namespace CaroClient
             pnlGame = CreateFullScreenPanel();
             pnlAdmin = CreateFullScreenPanel();
             pnlBoardSize = CreateFullScreenPanel();
-
+            // --- [THÊM MỚI] ---
+            pnlDifficulty = CreateFullScreenPanel();
+            this.Controls.Add(pnlDifficulty);
+            SetupDifficultyScreen();
             // Thêm vào Form
             this.Controls.Add(pnlLogin);
             this.Controls.Add(pnlRegister);
@@ -156,7 +172,29 @@ namespace CaroClient
         }
 
         private Panel CreateFullScreenPanel() { return new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(30, 30, 40), Visible = false }; }
-        private void ShowScreen(Panel p) { pnlLogin.Visible = false; pnlRegister.Visible = false; pnlLobby.Visible = false; pnlGame.Visible = false; pnlAdmin.Visible = false; pnlBoardSize.Visible = false; p.Visible = true; }
+        // Tìm hàm này và sửa lại:
+        private void ShowScreen(Panel p)
+        {
+            // 1. Ẩn tất cả các màn hình cũ
+            if (pnlLogin != null) pnlLogin.Visible = false;
+            if (pnlRegister != null) pnlRegister.Visible = false;
+            if (pnlLobby != null) pnlLobby.Visible = false;
+            if (pnlGame != null) pnlGame.Visible = false;
+            if (pnlAdmin != null) pnlAdmin.Visible = false;
+            if (pnlBoardSize != null) pnlBoardSize.Visible = false;
+
+            // --- [THÊM DÒNG NÀY VÀO] ---
+            // Phải ẩn cả màn hình chọn độ khó đi nữa!
+            if (pnlDifficulty != null) pnlDifficulty.Visible = false;
+            // ---------------------------
+
+            // 2. Hiện màn hình mong muốn
+            if (p != null)
+            {
+                p.Visible = true;
+                p.BringToFront(); // Đảm bảo nó nổi lên trên cùng
+            }
+        }
 
         // --- SETUP LOGIN (Đã chỉnh sửa vị trí & thêm nút Offline) ---
         private void SetupLoginScreen()
@@ -186,7 +224,7 @@ namespace CaroClient
             };
 
             Button btnGuestPlayAI = CreateButton("🤖 ĐẤU VỚI MÁY (OFFLINE)", 20, 185, 360, Color.OrangeRed);
-            btnGuestPlayAI.Click += (s, e) => StartPvEGame();
+            btnGuestPlayAI.Click += (s, e) => ShowScreen(pnlDifficulty);
 
             gbGuest.Controls.Add(lblIP); gbGuest.Controls.Add(txtServerIP); gbGuest.Controls.Add(txtNickNameGuest); gbGuest.Controls.Add(btnGuestJoin); gbGuest.Controls.Add(btnGuestPlayAI);
             pnlLogin.Controls.Add(gbGuest);
@@ -300,7 +338,7 @@ namespace CaroClient
             Panel pnlChatInput = new Panel { Dock = DockStyle.Bottom, Height = 80, BackColor = Color.Transparent };
 
             // Khung hiển thị chat
-            RichTextBox rtbChatContent = new RichTextBox
+            RichTextBox rtbChatContent = new ExRichTextBox
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(25, 25, 35),
@@ -330,15 +368,28 @@ namespace CaroClient
             pnlChatInput.Controls.Add(btnSendChat);
 
             // Emote Popup
-            pnlLobbyEmoteSelector = new Panel { Size = new Size(200, 60), Location = new Point(30, 400), BackColor = Color.White, Visible = false, BorderStyle = BorderStyle.FixedSingle };
-            string[] emojis = { "😂", "😡", "😭", "😎" };
-            for (int i = 0; i < 4; i++)
-            {
-                string symbol = emojis[i];
-                Button btn = new Button { Text = symbol, Size = new Size(45, 45), Location = new Point(5 + i * 50, 5), Font = new Font("Segoe UI Emoji", 15), FlatStyle = FlatStyle.Flat };
-                btn.Click += (s, e) => { SendCommand($"LOBBY_CHAT|{symbol}"); pnlLobbyEmoteSelector.Visible = false; };
-                pnlLobbyEmoteSelector.Controls.Add(btn);
-            }
+            //pnlLobbyEmoteSelector = new Panel { Size = new Size(200, 60), Location = new Point(30, 400), BackColor = Color.White, Visible = false, BorderStyle = BorderStyle.FixedSingle };
+            //string[] emojis = { "😂", "😡", "😭", "😎", "😀", "😃", "😄", "😁", 
+            //    "😆", "😅", " 😂", "🤣", "😴", "🤤", "😪", " 😲", "😯", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣", "😞", "😓", "😩", "😫"
+            //    ,"😎", "😼"
+            //};
+
+
+            
+            pnlLobbyEmoteSelector = CreatePagedEmotePanel(
+                new Point(15, 400), 
+                (symbol) => {
+                    SendCommand($"LOBBY_CHAT|{symbol}");
+                    pnlLobbyEmoteSelector.Visible = false; // Chọn xong thì ẩn bảng đi
+                }
+            );
+            // ------------------------
+
+            pnlLeftChat.Controls.Add(pnlLobbyEmoteSelector);
+            pnlLobbyEmoteSelector.BringToFront();
+            // --------------------------------------------------
+
+            pnlLeftChat.Controls.Add(pnlLobbyEmoteSelector);
 
             pnlLeftChat.Controls.Add(pnlLobbyEmoteSelector);
             pnlLeftChat.Controls.Add(rtbChatContent);
@@ -570,16 +621,33 @@ namespace CaroClient
             }
         }
 
+        // Hàm căn giữa
         private void CenterLobbyControls()
         {
             if (pnlLobby != null && pnlLobby.Visible)
             {
                 int cx = pnlLobby.Width / 2;
                 int y = 50; int gap = 15;
+
+                // Căn giữa các nhãn tiêu đề
                 if (lblWelcome != null) { lblWelcome.Location = new Point(cx - (lblWelcome.Width / 2), y); y += lblWelcome.Height + 5; }
                 if (lblStatus != null) { lblStatus.Location = new Point(cx - (lblStatus.Width / 2), y); y += lblStatus.Height + 30; }
-                if (btnOpenAdmin != null) btnOpenAdmin.Location = new Point(pnlLobby.Width - 170, 20);
 
+                // --- [SỬA LỖI QUAN TRỌNG TẠI ĐÂY] ---
+                if (btnOpenAdmin != null)
+                {
+                    // 1. Dòng này giúp nút hiện lại khi quay về Lobby (Code của em đang thiếu dòng này!)
+                    btnOpenAdmin.Visible = isAdmin;
+
+                    if (btnOpenAdmin.Parent != null)
+                    {
+                        // Dùng btnOpenAdmin.Parent.Width thay vì pnlLobby.Width
+                        btnOpenAdmin.Location = new Point(btnOpenAdmin.Parent.Width - 140, 120);
+                    }
+                }
+                // -------------------------------------
+
+                // Căn giữa các nút chức năng
                 if (btnLeaderboard != null) { btnLeaderboard.Location = new Point(cx - 150, y); y += btnLeaderboard.Height + gap; }
                 if (btnHistory != null) { btnHistory.Location = new Point(cx - 150, y); y += btnHistory.Height + gap; }
                 if (btnFindMatch != null) { btnFindMatch.Location = new Point(cx - 150, y); y += btnFindMatch.Height + gap; }
@@ -723,7 +791,40 @@ namespace CaroClient
             btnBoard20x20 = CreateBoardSizeButton("20x20", "Chiến thuật", 350, 390, Color.FromArgb(50, 110, 160)); btnBoard20x20.Click += (s, e) => { boardSize = 20; ProcessSelectedGameMode(); }; pnlBoardSize.Controls.Add(btnBoard20x20);
             btnBackToLobby = CreateButton("⬅ Quay lại", 350, 510, 400, Color.Gray); btnBackToLobby.Click += (s, e) => ShowScreen(pnlLobby); pnlBoardSize.Controls.Add(btnBackToLobby);
         }
+        private void SetupDifficultyScreen()
+        {
+            // 1. Tiêu đề
+            Label lblTitle = new Label
+            {
+                Text = "CHỌN ĐỘ KHÓ",
+                Font = new Font("Segoe UI", 24, FontStyle.Bold),
+                ForeColor = Color.Cyan,
+                AutoSize = true,
+                Location = new Point(420, 50) // Căn giữa tươm tất
+            };
+            pnlDifficulty.Controls.Add(lblTitle);
 
+            // 2. Các nút chọn độ khó
+            // DỄ (Màu xanh lá)
+            Button btnEasy = CreateButton("🐣 DỄ (GÀ)", 350, 150, 400, Color.LimeGreen);
+            btnEasy.Click += (s, e) => StartPvEGame(1); // Truyền mức 1
+            pnlDifficulty.Controls.Add(btnEasy);
+
+            // TRUNG BÌNH (Màu vàng)
+            Button btnMedium = CreateButton("🐯 TRUNG BÌNH", 350, 250, 400, Color.Orange);
+            btnMedium.Click += (s, e) => StartPvEGame(2); // Truyền mức 2
+            pnlDifficulty.Controls.Add(btnMedium);
+
+            // KHÓ (Màu đỏ)
+            Button btnHard = CreateButton("🤖 KHÓ (SIÊU CẤP)", 350, 350, 400, Color.Red);
+            btnHard.Click += (s, e) => StartPvEGame(3); // Truyền mức 3
+            pnlDifficulty.Controls.Add(btnHard);
+
+            // 3. Nút quay lại
+            Button btnBack = CreateButton("⬅ QUAY LẠI", 350, 480, 400, Color.Gray);
+            btnBack.Click += (s, e) => ShowScreen(pnlLogin);
+            pnlDifficulty.Controls.Add(btnBack);
+        }
         private void SetupGameScreen()
         {
             // --- 1. TẠO PANEL CHÍNH ---
@@ -748,7 +849,7 @@ namespace CaroClient
             left.Controls.Add(lblChatTitle);
 
             // Khung hiển thị tin nhắn (Kéo dài gần hết chiều cao)
-            rtbChatLog = new RichTextBox
+            rtbChatLog = new ExRichTextBox
             {
                 Location = new Point(10, 35),
                 Width = 260,
@@ -789,21 +890,26 @@ namespace CaroClient
                 BorderStyle = BorderStyle.FixedSingle
             };
 
-            string[] emojis = { "😂", "😡", "😭", "😎" };
-            for (int i = 0; i < 4; i++)
-            {
-                string symbol = emojis[i];
-                Button btn = new Button
-                {
-                    Text = symbol,
-                    Size = new Size(45, 45),
-                    Location = new Point(5 + i * 50, 5),
-                    Font = new Font("Segoe UI Emoji", 15),
-                    FlatStyle = FlatStyle.Flat
-                };
-                btn.Click += (s, e) => { SendCommand($"EMOTE|{symbol}"); pnlEmoteSelector.Visible = false; };
-                pnlEmoteSelector.Controls.Add(btn);
-            }
+            // --- Thay thế đoạn cũ ---
+            pnlEmoteSelector = CreatePagedEmotePanel(
+                new Point(15, 540), // Vị trí nằm trên khung chat
+                (symbol) => {
+                    SendCommand($"EMOTE|{symbol}");
+                    pnlEmoteSelector.Visible = false;
+                }
+            );
+            // ------------------------
+
+            left.Controls.Add(pnlEmoteSelector); // Add vào Panel bên trái (chứa khung chat)
+            pnlEmoteSelector.BringToFront();
+            // --------------------------------------------------
+
+            left.Controls.Add(rtbChatLog);
+            left.Controls.Add(btnEmote);
+            left.Controls.Add(txtMessage);
+            left.Controls.Add(btnSend);
+            left.Controls.Add(pnlEmoteSelector);
+            pnlEmoteSelector.BringToFront();
 
             left.Controls.Add(rtbChatLog);
             left.Controls.Add(btnEmote);
@@ -921,12 +1027,33 @@ namespace CaroClient
         }
 
         // --- HÀM LOGIC GAME ---
-        private void StartPvEGame()
+        // Thêm tham số 'level' vào hàm
+        private void StartPvEGame(int level)
         {
-            CheDoChoi = "VS_MAY"; boardSize = 15; mySide = 1; banCoAo = new int[boardSize, boardSize]; playerMoveCount = 0;
+            CheDoChoi = "VS_MAY";
+            boardSize = 15;
+            mySide = 1;
+            banCoAo = new int[boardSize, boardSize];
+            playerMoveCount = 0;
+
+            // --- [QUAN TRỌNG: CÀI ĐẶT ĐỘ KHÓ CHO AI] ---
+            aiBot.SetDifficulty(level);
+            // -------------------------------------------
+
             currentUsername = (string.IsNullOrWhiteSpace(txtNickNameGuest.Text) || txtNickNameGuest.Text == "Nhập biệt danh...") ? "Người Chơi" : txtNickNameGuest.Text;
-            ShowScreen(pnlGame); pnlChessBoard.Invalidate(); lblLuotDi.Text = "Bạn đi trước (X)"; lblWelcome.Text = $"Xin chào, {currentUsername}!";
-            btnXinThua.Visible = false; btnXinHoa.Visible = false; btnUndo.Enabled = true; ResetTimer();
+
+            ShowScreen(pnlGame);
+            pnlChessBoard.Invalidate();
+
+            // Cập nhật text hiển thị độ khó cho ngầu
+            string strLevel = level == 1 ? "Dễ" : (level == 2 ? "Trung Bình" : "Khó");
+            lblLuotDi.Text = $"Bạn đi trước (Mức: {strLevel})";
+
+            lblWelcome.Text = $"Xin chào, {currentUsername}!";
+            btnXinThua.Visible = false;
+            btnXinHoa.Visible = false;
+            btnUndo.Enabled = true;
+            ResetTimer();
         }
 
         private void InitializeGameLogic()
@@ -1378,7 +1505,17 @@ namespace CaroClient
                         string content = parts[2];
                         this.Invoke(new Action(() => {
                             PlaySound(Properties.Resources.ding);
-                            rtbChatLog.AppendText($"[{senderName}]: {content}\n");
+
+                            // 1. Tên người gửi
+                            rtbChatLog.SelectionColor = Color.Cyan; // Màu xanh cho tên nổi bật
+                            rtbChatLog.SelectionFont = new Font("Segoe UI", 10, FontStyle.Bold);
+                            rtbChatLog.AppendText($"[{senderName}]: ");
+
+                            // 2. Nội dung (Dùng font Emoji)
+                            rtbChatLog.SelectionColor = Color.White;
+                            rtbChatLog.SelectionFont = new Font("Segoe UI Emoji", 12); // <-- QUAN TRỌNG
+                            rtbChatLog.AppendText($"{content}\n");
+
                             rtbChatLog.ScrollToCaret();
                         }));
                     }
@@ -1391,6 +1528,8 @@ namespace CaroClient
                                                             : ((mySide == 2) ? lblEmoteP1 : lblEmoteP2);
                             if (targetLabel != null)
                             {
+                                // Sét Font Emoji kích thước lớn (40)
+                                targetLabel.Font = new Font("Segoe UI Emoji", 40); // <-- QUAN TRỌNG
                                 targetLabel.Text = symbol;
                                 targetLabel.Visible = true;
                                 targetLabel.BringToFront();
@@ -1405,10 +1544,16 @@ namespace CaroClient
                         string sender = parts[1];
                         string content = parts[2];
                         this.Invoke(new Action(() => {
+                            // 1. Tên người gửi: Dùng Font thường, màu Vàng
                             rtbLobbyChat.SelectionColor = Color.Yellow;
+                            rtbLobbyChat.SelectionFont = new Font("Segoe UI", 10, FontStyle.Bold);
                             rtbLobbyChat.AppendText($"[{sender}]: ");
+
+                            // 2. Nội dung tin nhắn: Dùng Font "Segoe UI Emoji" để hiện màu
                             rtbLobbyChat.SelectionColor = Color.White;
+                            rtbLobbyChat.SelectionFont = new Font("Segoe UI Emoji", 12); // <-- QUAN TRỌNG
                             rtbLobbyChat.AppendText($"{content}\n");
+
                             rtbLobbyChat.ScrollToCaret();
                             if (pnlLobby.Visible) PlaySound(Properties.Resources.ding);
                         }));
@@ -1710,6 +1855,49 @@ namespace CaroClient
                         string data = string.Join("|", parts, 1, parts.Length - 1);
                         this.Invoke(new Action(() => ShowLeaderboardDialog(data)));
                     }
+                    else if (cmd == "ADMIN_DATA")
+                    {
+                        // Server gửi về dạng: ADMIN_DATA|Dòng 1|Dòng 2|Dòng 3...
+                        // Ta cần bỏ chữ "ADMIN_DATA" đi, và nối các phần còn lại bằng xuống dòng
+                        string content = "";
+                        if (parts.Length > 1)
+                        {
+                            // Thay thế dấu gạch đứng | bằng xuống dòng để hiển thị danh sách đẹp như ảnh
+                            content = string.Join("\n", parts, 1, parts.Length - 1);
+                        }
+
+                        this.Invoke(new Action(() => {
+                            if (rtbAdminData != null)
+                            {
+                                rtbAdminData.Text = content; // Hiển thị lên bảng đen
+                            }
+                        }));
+                    }
+                    else if (cmd == "FORCE_DISCONNECT")
+                    {
+                        this.Invoke(new Action(() => {
+                            // 1. Đóng kết nối mạng ngay lập tức
+                            if (client != null) client.Close();
+
+                            // 2. Reset các trạng thái đăng nhập
+                            isLoggedIn = false;
+                            isAdmin = false;
+                            currentUsername = "";
+
+                            // 3. Dừng các timer game (nếu đang chạy)
+                            if (tmCoolDown != null) tmCoolDown.Stop();
+
+                            // 4. ĐÁ VĂNG VỀ MÀN HÌNH ĐĂNG NHẬP
+                            ShowScreen(pnlLogin);
+
+                            // 5. Xóa trắng các ô nhập liệu để người dùng phải nhập lại từ đầu
+                            txtUserLogin.Clear();
+                            txtPassLogin.Clear();
+
+                            // (Tùy chọn) Hiện thông báo nếu chưa có thông báo trước đó
+                            // MessageBox.Show("Kết nối đã bị ngắt!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }));
+                    }
                     // ...
                     else if (cmd == "MESSAGE")
                     {
@@ -1766,7 +1954,189 @@ namespace CaroClient
         private void DrawChess(Graphics g, Image i, string t, Brush b, int x, int y, float s) { float sc = boardSize == 10 ? 0.8f : 0.75f; float sz = s * sc; float off = (s - sz) / 2; if (i != null) g.DrawImage(i, x * s + off, y * s + off, sz, sz); else g.DrawString(t, new Font("Arial", s * 0.5f, FontStyle.Bold), b, x * s + s * 0.2f, y * s + s * 0.1f); }
         private void SendChatMessage() { if (!string.IsNullOrWhiteSpace(txtMessage.Text)) { SendCommand($"CHAT|{txtMessage.Text}"); txtMessage.Clear(); } }
         private void ResetTimer() { thoiGianConLai = tongThoiGian; lblDongHo.Text = "03:00"; prcbCoolDown.Value = tongThoiGian; tmCoolDown.Start(); }
-        
+
+        // Hàm tạo bảng chọn Emote trượt (Sliding)
+        // parentControl: Panel cha để chứa bảng emote
+        // location: Vị trí hiển thị
+        // onEmoteClick: Hàm xử lý khi chọn icon (gửi lệnh gì)
+        // Hàm tạo bảng Emote có nút Next/Prev
+        private Panel CreatePagedEmotePanel(Point location, Action<string> onEmoteClick)
+        {
+            int iconSize = 45;      // Kích thước 1 icon
+            int margin = 5;         // Khoảng cách giữa các icon
+            int visibleCount = 3;   // Số icon hiển thị cùng lúc (Giảm xuống 4 để chừa chỗ cho nút mũi tên)
+            int buttonWidth = 30;   // Kích thước nút mũi tên
+
+            // 1. Tính toán kích thước
+            int viewWidth = (iconSize + margin) * visibleCount; // Chiều rộng vùng hiển thị icon
+            int totalWidth = (iconSize + margin) * listEmojis.Length; // Chiều rộng thực tế chứa hết icon
+            int panelHeight = iconSize + 15;
+            int totalPanelWidth = viewWidth + (buttonWidth * 2) + 10; // Tổng chiều rộng cả bảng (bao gồm nút)
+
+            // 2. Panel Chính (Chứa tất cả)
+            Panel pnlMain = new Panel
+            {
+                Size = new Size(totalPanelWidth, panelHeight),
+                Location = location,
+                BackColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Visible = false // Mặc định ẩn
+            };
+
+            // 3. Nút Previous (<)
+            Button btnPrev = new Button
+            {
+                Text = "◀",
+                Size = new Size(buttonWidth, iconSize),
+                Location = new Point(0, 5),
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Enabled = false // Ban đầu ở trang 1 nên không quay lại được
+            };
+            btnPrev.FlatAppearance.BorderSize = 0;
+
+            // 4. Nút Next (>)
+            Button btnNext = new Button
+            {
+                Text = "▶",
+                Size = new Size(buttonWidth, iconSize),
+                Location = new Point(buttonWidth + viewWidth + 5, 5), // Nằm bên phải cùng
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand
+            };
+            btnNext.FlatAppearance.BorderSize = 0;
+
+            // 5. Panel Mask (Khung nhìn - Cắt bớt phần thừa)
+            Panel pnlMask = new Panel
+            {
+                Size = new Size(viewWidth, panelHeight),
+                Location = new Point(buttonWidth + 5, 0), // Nằm giữa 2 nút
+                BackColor = Color.Transparent
+            };
+
+            // 6. Panel Content (Chứa icon - Trượt bên trong Mask)
+            Panel pnlContent = new Panel
+            {
+                Size = new Size(totalWidth, panelHeight),
+                Location = new Point(0, 0),
+                BackColor = Color.Transparent
+            };
+
+            // --- LOGIC THÊM ICON VÀO PANEL CONTENT ---
+            for (int i = 0; i < listEmojis.Length; i++)
+            {
+                string symbol = listEmojis[i];
+                Button btn = new Button
+                {
+                    Text = symbol,
+                    Size = new Size(iconSize, iconSize),
+                    Location = new Point(margin + i * (iconSize + margin), 5),
+                    Font = new Font("Segoe UI Emoji", 15),
+                    FlatStyle = FlatStyle.Flat,
+                    Tag = symbol,
+                    Cursor = Cursors.Hand
+                };
+                btn.FlatAppearance.BorderSize = 0;
+                btn.Click += (s, e) => onEmoteClick(symbol); // Sự kiện chọn icon
+                pnlContent.Controls.Add(btn);
+            }
+
+            // --- LOGIC XỬ LÝ SỰ KIỆN NÚT BẤM (QUAN TRỌNG) ---
+            int scrollStep = (iconSize + margin) * visibleCount; // Mỗi lần bấm trượt 1 trang (4 icon)
+
+            btnNext.Click += (s, e) =>
+            {
+                // Trượt sang trái (giá trị Left giảm)
+                if (pnlContent.Left - scrollStep > -(totalWidth))
+                {
+                    pnlContent.Left -= scrollStep;
+                }
+                else // Nếu trượt quá thì về cuối hẳn
+                {
+                    pnlContent.Left = -(totalWidth - viewWidth);
+                }
+
+                // Cập nhật trạng thái nút
+                btnPrev.Enabled = true;
+                if (pnlContent.Left <= -(totalWidth - viewWidth)) btnNext.Enabled = false;
+            };
+
+            btnPrev.Click += (s, e) =>
+            {
+                // Trượt sang phải (giá trị Left tăng)
+                if (pnlContent.Left + scrollStep < 0)
+                {
+                    pnlContent.Left += scrollStep;
+                }
+                else // Về đầu
+                {
+                    pnlContent.Left = 0;
+                }
+
+                // Cập nhật trạng thái nút
+                btnNext.Enabled = true;
+                if (pnlContent.Left == 0) btnPrev.Enabled = false;
+            };
+
+            // Ghép các thành phần vào nhau
+            pnlMask.Controls.Add(pnlContent);
+            pnlMain.Controls.Add(btnPrev);
+            pnlMain.Controls.Add(pnlMask);
+            pnlMain.Controls.Add(btnNext);
+
+            return pnlMain;
+        }
+
+        // --- CÁC HÀM XỬ LÝ SỰ KIỆN CHUỘT (DRAG LOGIC) ---
+
+        private void Emote_MouseDown(object sender, MouseEventArgs e)
+        {
+            isDraggingEmote = true;
+            isClickAction = true; // Giả định là click, nếu di chuyển nhiều sẽ thành false
+            lastMouseX = Cursor.Position.X; // Dùng toạ độ màn hình để chính xác nhất
+        }
+
+        private void Emote_MouseMove(object sender, MouseEventArgs e, Panel pnlInner, int outerWidth)
+        {
+            if (isDraggingEmote)
+            {
+                int currentX = Cursor.Position.X;
+                int deltaX = currentX - lastMouseX;
+
+                // Nếu di chuyển quá ngưỡng dragThreshold -> Đây là hành động Kéo, không phải Click
+                if (Math.Abs(deltaX) > dragThreshold || !isClickAction)
+                {
+                    isClickAction = false; // Hủy click
+
+                    // Di chuyển Panel con
+                    int newLeft = pnlInner.Left + deltaX;
+
+                    // Giới hạn biên (Không cho kéo quá trái hoặc quá phải)
+                    int minLeft = outerWidth - pnlInner.Width; // Điểm giới hạn bên trái
+                    if (newLeft > 0) newLeft = 0; // Không được kéo quá mép phải
+                    if (newLeft < minLeft) newLeft = minLeft; // Không được kéo quá mép trái
+
+                    pnlInner.Left = newLeft;
+                    lastMouseX = currentX;
+                }
+            }
+        }
+
+        private void Emote_MouseUp(object sender, MouseEventArgs e, Action<string> onClickAction)
+        {
+            isDraggingEmote = false;
+
+            // Nếu sau khi nhả chuột mà vẫn được tính là Click -> Thực hiện chọn Icon
+            if (isClickAction)
+            {
+                Button btn = sender as Button;
+                if (btn != null)
+                {
+                    string symbol = btn.Tag.ToString();
+                    onClickAction(symbol); // Gọi hàm gửi icon
+                }
+            }
+        }
         // Thêm tham số 'sound' kiểu Stream để nhận file từ Resources
         private void PlaySound(System.IO.Stream sound)
         {
@@ -2001,6 +2371,29 @@ namespace CaroClient
             }
 
             lbForm.ShowDialog();
+        }
+
+        // Lớp RichTextBox tùy chỉnh để hỗ trợ Emoji màu
+        public class ExRichTextBox : RichTextBox
+        {
+            [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+            static extern IntPtr LoadLibrary(string lpFileName);
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    CreateParams createParams = base.CreateParams;
+                    try
+                    {
+                        // Nạp thư viện MsftEdit.dll (Chứa RichEdit 5.0 hỗ trợ Emoji màu)
+                        LoadLibrary("MsftEdit.dll");
+                        createParams.ClassName = "RichEdit50W";
+                    }
+                    catch { } // Nếu lỗi thì kệ, dùng mặc định
+                    return createParams;
+                }
+            }
         }
     }
 }
