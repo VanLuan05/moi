@@ -377,6 +377,21 @@ namespace CaroServer
                         }
                     }
                     // --- XỬ LÝ YÊU CẦU VÁN MỚI (NEW_GAME_FLOW) ---
+                    else if (command == "NEW_GAME_REQUEST")
+                    {
+                        Room r = FindRoomByClient(client);
+                        if (r != null && r.Players.Count > 1)
+                        {
+                            // Tìm đối thủ: Nếu mình là người [0] thì đối thủ là [1], và ngược lại
+                            TcpClient opponent = (r.Players[0] == client) ? r.Players[1] : r.Players[0];
+
+                            if (opponent != null)
+                            {
+                                // Chuyển lời nhắn sang cho đối thủ
+                                SendToClient(opponent, "NEW_GAME_ASK");
+                            }
+                        }
+                    }
                     // --- XỬ LÝ CẦU HÒA (DRAW FLOW) ---
                     else if (command == "DRAW_REQUEST")
                     {
